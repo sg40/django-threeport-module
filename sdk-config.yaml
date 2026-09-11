@@ -1,0 +1,23 @@
+ModuleName: Django
+ApiNamespace: threeport.io
+ApiDocs:
+  Title: Django Threeport API
+  Description: API server for the Threeport Django module.
+  ContactName: Juan Jose Restrepo
+  ContactEmail: juan.restrepo@intechideas.com
+ImageNamespace: docker.io/juanqleet
+ApiObjectGroups:
+- Name: django
+  Objects:
+    - Name: DjangoDefinition
+      Versions:
+        - v0
+      Reconcilable: true
+      Tptctl:
+        Enabled: true
+    - Name: DjangoInstance
+      Versions:
+        - v0
+      Reconcilable: true
+      Tptctl:
+        Enabled: true
