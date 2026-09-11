@@ -9,12 +9,43 @@ type DjangoDefinition struct {
 	tpapi_v0.Common         `swaggerignore:"true" mapstructure:",squash"`
 	tpapi_v0.Reconciliation `mapstructure:",squash"`
 	tpapi_v0.Definition     `mapstructure:",squash"`
-	DjangoInstances         []*DjangoInstance `validate:"optional,association"`
+
+	// The container image for the Django application. Unlike WordPress, a
+	// Django app has no canonical public image - every project builds its own -
+	// so the module cannot deploy anything without it.
+	Image *string `validate:"required" gorm:"not null"`
+
+	// The Django settings module the application runs with, e.g.
+	// myapp.settings.production. Passed through as DJANGO_SETTINGS_MODULE.
+	SettingsModule *string `validate:"optional"`
+
+	// The environment type used to determine config settings for a django
+	// definition.
+	Environment *string `validate:"optional" gorm:"default:dev"`
+
+	// The number of pod replicas to deploy for the Django app.
+	Replicas *int `validate:"optional"`
+
+	// If true, a cloud provider's managed database will be used for the Django
+	// DB. If false, a containerized Postgres will be deployed to Kubernetes.
+	ManagedDatabase *bool `validate:"optional" gorm:"default:false"`
+
+	// If true, django-admin migrate runs against the database before the
+	// application is made available. Django requires this on any schema change,
+	// so it defaults to true.
+	RunMigrations *bool `validate:"optional" gorm:"default:true"`
+
+	DjangoInstances []*DjangoInstance `validate:"optional,association"`
 }
 
 type DjangoInstance struct {
 	tpapi_v0.Common         `swaggerignore:"true" mapstructure:",squash"`
 	tpapi_v0.Reconciliation `mapstructure:",squash"`
 	tpapi_v0.Instance       `mapstructure:",squash"`
-	DjangoDefinitionID      *uint `validate:"required" gorm:"not null"`
+
+	// When using a DomainName, the subdomain to use to reach the Django
+	// instance.
+	SubDomain *string `validate:"optional"`
+
+	DjangoDefinitionID *uint `validate:"required" gorm:"not null"`
 }
