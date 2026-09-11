@@ -5,6 +5,7 @@ package v0
 import (
 	"encoding/json"
 	"fmt"
+	api "github.com/threeport/threeport/pkg/api/v0"
 	notifications "github.com/threeport/threeport/pkg/notifications/v0"
 	"time"
 )
@@ -84,6 +85,16 @@ func (dd *DjangoDefinition) ScheduledForDeletion() *time.Time {
 	return dd.DeletionScheduled
 }
 
+// RelationshipTaggedForeignKeys returns the relationship-tagged foreign keys on DjangoDefinition.
+func (d *DjangoDefinition) RelationshipTaggedForeignKeys() []api.RelationshipTaggedForeignKey {
+	return []api.RelationshipTaggedForeignKey{{
+		FieldName:    "KubernetesWorkloadDefinitionID",
+		ObjectID:     d.KubernetesWorkloadDefinitionID,
+		ObjectType:   new(api.KubernetesWorkloadDefinition).GetFullyQualifiedType(),
+		Relationship: api.RelationshipOwns,
+	}}
+}
+
 // NotificationPayload returns the notification payload that is delivered to the
 // controller when a change is made.  It includes the object as presented by the
 // client when the change was made.
@@ -147,4 +158,14 @@ func (di *DjangoInstance) GetFullyQualifiedType() string {
 // if scheduled for deletion or nil if not scheduled for deletion.
 func (di *DjangoInstance) ScheduledForDeletion() *time.Time {
 	return di.DeletionScheduled
+}
+
+// RelationshipTaggedForeignKeys returns the relationship-tagged foreign keys on DjangoInstance.
+func (d *DjangoInstance) RelationshipTaggedForeignKeys() []api.RelationshipTaggedForeignKey {
+	return []api.RelationshipTaggedForeignKey{{
+		FieldName:    "KubernetesWorkloadInstanceID",
+		ObjectID:     d.KubernetesWorkloadInstanceID,
+		ObjectType:   new(api.KubernetesWorkloadInstance).GetFullyQualifiedType(),
+		Relationship: api.RelationshipOwns,
+	}}
 }

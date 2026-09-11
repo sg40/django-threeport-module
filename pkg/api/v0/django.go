@@ -26,14 +26,16 @@ type DjangoDefinition struct {
 	// The number of pod replicas to deploy for the Django app.
 	Replicas *int `validate:"optional"`
 
-	// If true, a cloud provider's managed database will be used for the Django
-	// DB. If false, a containerized Postgres will be deployed to Kubernetes.
-	ManagedDatabase *bool `validate:"optional" gorm:"default:false"`
-
 	// If true, django-admin migrate runs against the database before the
 	// application is made available. Django requires this on any schema change,
 	// so it defaults to true.
 	RunMigrations *bool `validate:"optional" gorm:"default:true"`
+
+	// The Kubernetes workload definition carrying the manifests this module
+	// generates for the Django app and its database. The relationship tag has
+	// the API create the attached object reference, so the workload definition
+	// cannot be deleted while this definition still refers to it.
+	KubernetesWorkloadDefinitionID *uint `validate:"optional" relationship:"owns"`
 
 	DjangoInstances []*DjangoInstance `validate:"optional,association"`
 }
@@ -46,6 +48,10 @@ type DjangoInstance struct {
 	// When using a DomainName, the subdomain to use to reach the Django
 	// instance.
 	SubDomain *string `validate:"optional"`
+
+	// The Kubernetes workload instance deployed from this definition's
+	// workload definition.
+	KubernetesWorkloadInstanceID *uint `validate:"optional" relationship:"owns"`
 
 	DjangoDefinitionID *uint `validate:"required" gorm:"not null"`
 }
