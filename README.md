@@ -28,6 +28,20 @@ configured. It is the reusable part: one definition can back many instances.
 | `SubDomain` | no | The subdomain used to reach this instance when a domain name is attached. |
 | `DjangoDefinitionID` | yes | The definition this instance deploys. |
 
+## Status
+
+What works today, updated as the module progresses.
+
+| Piece | State |
+|---|---|
+| SDK config and API objects | done |
+| Generated API server, client, controller scaffolding | done |
+| Kubernetes manifests for the Django app | not started |
+| Definition reconciler | scaffolded, no business logic |
+| Instance reconciler | scaffolded, no business logic |
+| Config abstractions (`pkg/config`) | generated, not customised |
+| tptctl plugin | generated, not built |
+
 ## Known limitations
 
 **No managed database.** The database is always a containerized Postgres
