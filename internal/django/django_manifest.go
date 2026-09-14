@@ -37,6 +37,10 @@ const (
 //
 // The whole document is handed to Threeport as one Kubernetes workload
 // definition, so the pieces are created and removed together.
+//
+// No namespace is set on any object: Threeport assigns one per workload
+// instance and rewrites whatever the manifest declares, so naming it here would
+// suggest a control the module does not have.
 func djangoYaml(
 	definitionName string,
 	image string,
@@ -78,9 +82,8 @@ func djangoYaml(
 			"apiVersion": "v1",
 			"kind":       "Secret",
 			"metadata": map[string]interface{}{
-				"name":      dbSecretName,
-				"namespace": "default",
-				"labels":    labels("postgres"),
+				"name":   dbSecretName,
+				"labels": labels("postgres"),
 			},
 			"type": "Opaque",
 			"stringData": map[string]interface{}{
@@ -101,9 +104,8 @@ func djangoYaml(
 			"apiVersion": "v1",
 			"kind":       "PersistentVolumeClaim",
 			"metadata": map[string]interface{}{
-				"name":      dbServiceName,
-				"namespace": "default",
-				"labels":    labels("postgres"),
+				"name":   dbServiceName,
+				"labels": labels("postgres"),
 			},
 			"spec": map[string]interface{}{
 				"accessModes": []interface{}{"ReadWriteOnce"},
@@ -125,9 +127,8 @@ func djangoYaml(
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
 			"metadata": map[string]interface{}{
-				"name":      dbServiceName,
-				"namespace": "default",
-				"labels":    labels("postgres"),
+				"name":   dbServiceName,
+				"labels": labels("postgres"),
 			},
 			"spec": map[string]interface{}{
 				// one replica only: this is a single volume with a single
@@ -200,9 +201,8 @@ func djangoYaml(
 			"apiVersion": "v1",
 			"kind":       "Service",
 			"metadata": map[string]interface{}{
-				"name":      dbServiceName,
-				"namespace": "default",
-				"labels":    labels("postgres"),
+				"name":   dbServiceName,
+				"labels": labels("postgres"),
 			},
 			"spec": map[string]interface{}{
 				"selector": labels("postgres"),
@@ -240,15 +240,24 @@ func djangoYaml(
 		})
 	}
 
+	// django-admin is an installed console script, so Python puts its own
+	// directory on sys.path and not the project's. A server like gunicorn adds
+	// the working directory itself, which is why the application starts and a
+	// migration run would not: without this the job fails with
+	// ModuleNotFoundError on the settings module. The image is expected to have
+	// its project at the working directory, which is the usual layout.
+	migrateEnv := append([]interface{}{
+		map[string]interface{}{"name": "PYTHONPATH", "value": "."},
+	}, appEnv...)
+
 	if runMigrations {
 		migrationJob := &unstructured.Unstructured{
 			Object: map[string]interface{}{
 				"apiVersion": "batch/v1",
 				"kind":       "Job",
 				"metadata": map[string]interface{}{
-					"name":      fmt.Sprintf("%s-migrate", definitionName),
-					"namespace": "default",
-					"labels":    labels("django-migrate"),
+					"name":   fmt.Sprintf("%s-migrate", definitionName),
+					"labels": labels("django-migrate"),
 				},
 				"spec": map[string]interface{}{
 					// a failed migration is not something to retry blindly:
@@ -265,7 +274,7 @@ func djangoYaml(
 									"name":    "migrate",
 									"image":   image,
 									"command": []interface{}{"django-admin", "migrate", "--no-input"},
-									"env":     appEnv,
+									"env":     migrateEnv,
 								},
 							},
 						},
@@ -284,9 +293,8 @@ func djangoYaml(
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
 			"metadata": map[string]interface{}{
-				"name":      definitionName,
-				"namespace": "default",
-				"labels":    labels("django"),
+				"name":   definitionName,
+				"labels": labels("django"),
 			},
 			"spec": map[string]interface{}{
 				"replicas": replicas,
@@ -330,9 +338,8 @@ func djangoYaml(
 			"apiVersion": "v1",
 			"kind":       "Service",
 			"metadata": map[string]interface{}{
-				"name":      definitionName,
-				"namespace": "default",
-				"labels":    labels("django"),
+				"name":   definitionName,
+				"labels": labels("django"),
 			},
 			"spec": map[string]interface{}{
 				"selector": labels("django"),

@@ -96,3 +96,54 @@ func countOf(items []string, want string) int {
 
 	return n
 }
+
+// TestReplicasByEnv covers the default replica count. Only prod is special;
+// anything else, including an unrecognised value, gets the single-replica
+// default rather than an error, because Environment is a free-form string.
+func TestReplicasByEnv(t *testing.T) {
+	assert.Equal(t, 3, replicasByEnv("prod"))
+	assert.Equal(t, 1, replicasByEnv("dev"))
+	assert.Equal(t, 1, replicasByEnv("staging"), "an unrecognised environment falls back rather than failing")
+}
+
+// TestDbStorageByEnv covers the database volume size per environment.
+func TestDbStorageByEnv(t *testing.T) {
+	assert.Equal(t, 100, dbStorageByEnv("prod"))
+	assert.Equal(t, 20, dbStorageByEnv("dev"))
+	assert.Equal(t, 20, dbStorageByEnv(""))
+}
+
+// TestDjangoYaml_MigrationJobPythonPath covers the defect where the migration
+// job failed with ModuleNotFoundError while the application started fine.
+// django-admin is an installed console script, so Python puts /usr/local/bin on
+// sys.path rather than the project directory; a server adds the working
+// directory itself, which is why only the job broke.
+func TestDjangoYaml_MigrationJobPythonPath(t *testing.T) {
+	doc, err := djangoYaml("myapp", "myorg/myapp:v1", "myapp.settings", 1, "dev", 20, true)
+	require.NoError(t, err)
+
+	migrateJob := documentOfKind(t, doc, "Job")
+	require.NotEmpty(t, migrateJob, "the migration job must be present")
+	assert.Contains(t, migrateJob, "PYTHONPATH", "django-admin cannot import the settings module without it")
+}
+
+// documentOfKind returns the first document in a multi-document YAML string
+// with the given kind.
+func documentOfKind(t *testing.T, doc string, kind string) string {
+	t.Helper()
+
+	for _, chunk := range strings.Split(doc, "\n---\n") {
+		if strings.TrimSpace(chunk) == "" {
+			continue
+		}
+		var parsed struct {
+			Kind string `json:"kind"`
+		}
+		require.NoError(t, yaml.Unmarshal([]byte(chunk), &parsed))
+		if parsed.Kind == kind {
+			return chunk
+		}
+	}
+
+	return ""
+}

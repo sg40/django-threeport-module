@@ -3,18 +3,113 @@
 package django
 
 import (
-	v0 "django-threeport-module/pkg/api/v0"
+	"errors"
+	"fmt"
+
 	logr "github.com/go-logr/logr"
+	tpapi "github.com/threeport/threeport/pkg/api/v0"
+	tpclientlib "github.com/threeport/threeport/pkg/client/lib/v0"
+	tpclient "github.com/threeport/threeport/pkg/client/v0"
 	controller "github.com/threeport/threeport/pkg/controller/v0"
+
+	v0 "django-threeport-module/pkg/api/v0"
+	client_v0 "django-threeport-module/pkg/client/v0"
 )
 
 // v0DjangoDefinitionCreated performs reconciliation when a v0 DjangoDefinition
 // has been created.
+//
+// It renders the Kubernetes manifests for the application and hands them to
+// Threeport as a workload definition, then records that workload definition on
+// the Django definition. The API creates the attached object reference from
+// that foreign key, so nothing here manipulates attachments directly.
 func v0DjangoDefinitionCreated(
 	r *controller.Reconciler,
 	djangoDefinition *v0.DjangoDefinition,
 	log *logr.Logger,
 ) (int64, error) {
+	environment := "dev"
+	if djangoDefinition.Environment != nil {
+		environment = *djangoDefinition.Environment
+	}
+
+	replicas := replicasByEnv(environment)
+	if djangoDefinition.Replicas != nil {
+		replicas = *djangoDefinition.Replicas
+	}
+
+	// migrations default to on: Django needs them on any schema change, and a
+	// deployment that skipped them silently would fail at runtime instead
+	runMigrations := true
+	if djangoDefinition.RunMigrations != nil {
+		runMigrations = *djangoDefinition.RunMigrations
+	}
+
+	var settingsModule string
+	if djangoDefinition.SettingsModule != nil {
+		settingsModule = *djangoDefinition.SettingsModule
+	}
+
+	yamlDoc, err := djangoYaml(
+		*djangoDefinition.Name,
+		*djangoDefinition.Image,
+		settingsModule,
+		replicas,
+		environment,
+		dbStorageByEnv(environment),
+		runMigrations,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to generate django YAML manifest: %w", err)
+	}
+
+	// reconciliation runs again on requeue, so an existing workload definition
+	// is adopted rather than duplicated
+	nameQuery := fmt.Sprintf("name=%s", *djangoDefinition.Name)
+	existingWorkloadDefinitions, err := tpclient.GetKubernetesWorkloadDefinitionsByQueryString(
+		r.APIClient,
+		r.APIServer,
+		nameQuery,
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"failed to check for kubernetes workload definitions with name %s: %w",
+			*djangoDefinition.Name, err,
+		)
+	}
+
+	var workloadDefinition *tpapi.KubernetesWorkloadDefinition
+	if len(*existingWorkloadDefinitions) == 0 {
+		created, err := tpclient.CreateKubernetesWorkloadDefinition(
+			r.APIClient,
+			r.APIServer,
+			&tpapi.KubernetesWorkloadDefinition{
+				Definition:   tpapi.Definition{Name: djangoDefinition.Name},
+				YAMLDocument: &yamlDoc,
+			},
+		)
+		if err != nil {
+			return 0, fmt.Errorf("failed to create kubernetes workload definition: %w", err)
+		}
+		workloadDefinition = created
+	} else {
+		workloadDefinition = &(*existingWorkloadDefinitions)[0]
+	}
+
+	// recording the foreign key is what creates the attachment: the API's
+	// relationship hooks read it and write the attached object reference, which
+	// then blocks the workload definition from being deleted out from under us
+	if _, err := client_v0.UpdateDjangoDefinition(
+		r.APIClient,
+		r.APIServer,
+		&v0.DjangoDefinition{
+			Common:                         tpapi.Common{ID: djangoDefinition.ID},
+			KubernetesWorkloadDefinitionID: workloadDefinition.ID,
+		},
+	); err != nil {
+		return 0, fmt.Errorf("failed to record kubernetes workload definition on django definition: %w", err)
+	}
+
 	return 0, nil
 }
 
@@ -35,5 +130,48 @@ func v0DjangoDefinitionDeleted(
 	djangoDefinition *v0.DjangoDefinition,
 	log *logr.Logger,
 ) (int64, error) {
+	// a definition that never got as far as creating its workload has nothing
+	// to clean up
+	if djangoDefinition.KubernetesWorkloadDefinitionID == nil {
+		return 0, nil
+	}
+
+	if _, err := tpclient.DeleteKubernetesWorkloadDefinition(
+		r.APIClient,
+		r.APIServer,
+		*djangoDefinition.KubernetesWorkloadDefinitionID,
+	); err != nil {
+		// the workload definition being gone already is the state we want, and
+		// happens whenever a delete is retried
+		if !errors.Is(err, tpclientlib.ErrObjectNotFound) {
+			return 0, fmt.Errorf(
+				"failed to delete kubernetes workload definition with ID %d: %w",
+				*djangoDefinition.KubernetesWorkloadDefinitionID, err,
+			)
+		}
+	}
+
 	return 0, nil
+}
+
+// replicasByEnv returns the default replica count for an environment, used
+// when the definition does not state one.
+func replicasByEnv(env string) int {
+	switch env {
+	case "prod":
+		return 3
+	default:
+		return 1
+	}
+}
+
+// dbStorageByEnv returns the database volume size in gigabytes for an
+// environment.
+func dbStorageByEnv(env string) int {
+	switch env {
+	case "prod":
+		return 100
+	default:
+		return 20
+	}
 }

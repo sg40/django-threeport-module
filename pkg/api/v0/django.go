@@ -49,6 +49,11 @@ type DjangoInstance struct {
 	// instance.
 	SubDomain *string `validate:"optional"`
 
+	// The Kubernetes runtime to deploy this instance to. When unset the
+	// module falls back to the default runtime, so a user with one cluster
+	// does not have to name it.
+	KubernetesRuntimeInstanceID *uint `validate:"optional" relationship:"requires"`
+
 	// The Kubernetes workload instance deployed from this definition's
 	// workload definition.
 	KubernetesWorkloadInstanceID *uint `validate:"optional" relationship:"owns"`

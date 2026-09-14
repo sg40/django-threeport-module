@@ -163,6 +163,11 @@ func (di *DjangoInstance) ScheduledForDeletion() *time.Time {
 // RelationshipTaggedForeignKeys returns the relationship-tagged foreign keys on DjangoInstance.
 func (d *DjangoInstance) RelationshipTaggedForeignKeys() []api.RelationshipTaggedForeignKey {
 	return []api.RelationshipTaggedForeignKey{{
+		FieldName:    "KubernetesRuntimeInstanceID",
+		ObjectID:     d.KubernetesRuntimeInstanceID,
+		ObjectType:   new(api.KubernetesRuntimeInstance).GetFullyQualifiedType(),
+		Relationship: api.RelationshipRequires,
+	}, {
 		FieldName:    "KubernetesWorkloadInstanceID",
 		ObjectID:     d.KubernetesWorkloadInstanceID,
 		ObjectType:   new(api.KubernetesWorkloadInstance).GetFullyQualifiedType(),

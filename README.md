@@ -25,7 +25,8 @@ configured. It is the reusable part: one definition can back many instances.
 
 | Field | Required | Notes |
 |---|---|---|
-| `SubDomain` | no | The subdomain used to reach this instance when a domain name is attached. |
+| `SubDomain` | no | The subdomain used to reach this instance when a domain name is attached. Not yet acted on — see limitations. |
+| `KubernetesRuntimeInstanceID` | no | The runtime to deploy to. Falls back to the control plane's default runtime when unset. |
 | `DjangoDefinitionID` | yes | The definition this instance deploys. |
 
 ## Status
@@ -36,11 +37,42 @@ What works today, updated as the module progresses.
 |---|---|
 | SDK config and API objects | done |
 | Generated API server, client, controller scaffolding | done |
-| Kubernetes manifests for the Django app | not started |
-| Definition reconciler | scaffolded, no business logic |
-| Instance reconciler | scaffolded, no business logic |
-| Config abstractions (`pkg/config`) | generated, not customised |
-| tptctl plugin | generated, not built |
+| Kubernetes manifests for the Django app | done |
+| Definition reconciler | done |
+| Instance reconciler | done |
+| Config abstractions (`pkg/config`) | generated, still the scaffold |
+| tptctl plugin | builds, installs, and serves its subcommands |
+| Verified against a live control plane | yes — see below |
+
+## What has been verified
+
+The module was installed into a Threeport control plane on kind and exercised
+end to end with a minimal Django image:
+
+- creating a `DjangoDefinition` produces a `KubernetesWorkloadDefinition`
+- creating a `DjangoInstance` before its definition finished reconciling
+  requeues and succeeds on the retry, rather than failing
+- the workload deploys seven resources: the database secret, its volume claim,
+  a PostgreSQL deployment and service, the migration job, and the application
+  deployment and service
+- the application starts and stays ready
+- deleting the instance removes the workload, and the API refuses to delete a
+  definition that still has instances
+- deleting the definition removes the workload definition
+
+Two things came out of that run and are now fixed.
+
+**The migration job could not import the project.** It failed with
+`ModuleNotFoundError` while the application started fine. `django-admin` is an
+installed console script, so Python puts its own directory on `sys.path` and
+not the project's; a server such as gunicorn adds the working directory itself,
+which is why only the job broke. The job now sets `PYTHONPATH=.`, which assumes
+the image keeps its project at the working directory — the usual layout.
+
+**Namespaces were declared and ignored.** The manifests set
+`namespace: default` on every object, and Threeport assigned its own namespace
+per workload instance regardless. The declarations were removed rather than
+left to imply a control the module does not have.
 
 ## Known limitations
 
@@ -56,6 +88,24 @@ again.
 **Secrets are not modelled.** `SECRET_KEY` does not belong in a database
 column. Threeport has a `Secret` object that is the right home for it, but
 wiring it in adds a dependency between modules, so it is deferred.
+
+**The database password is regenerated on every render.** `djangoYaml` mints a
+new credential each time it runs, so re-rendering an existing definition would
+produce a manifest the running database does not accept. The definition
+reconciler avoids this by adopting an existing workload definition rather than
+rewriting it, but an update path that re-renders will have to read the current
+secret instead.
+
+**The config abstractions are still the SDK scaffold.** `DjangoDefinitionValues`
+carries the generated `Name` and `Age` placeholders, so
+`tptctl django create django-definition -c config.yaml` cannot express the real
+fields yet. Objects have to be created through the client library until that is
+filled in.
+
+**`SubDomain` is stored but not acted on.** Reaching an instance by subdomain
+needs a gateway and a domain name attached to it, which is a second set of
+Threeport objects this module does not create yet. The field is modelled so the
+API does not have to change when it is implemented.
 
 **`ALLOWED_HOSTS` is derived,** not configured, from the domain name and
 subdomain attached to an instance.

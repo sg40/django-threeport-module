@@ -3,18 +3,104 @@
 package django
 
 import (
-	v0 "django-threeport-module/pkg/api/v0"
+	"errors"
+	"fmt"
+
 	logr "github.com/go-logr/logr"
+	tpapi "github.com/threeport/threeport/pkg/api/v0"
+	tpclientlib "github.com/threeport/threeport/pkg/client/lib/v0"
+	tpclient "github.com/threeport/threeport/pkg/client/v0"
 	controller "github.com/threeport/threeport/pkg/controller/v0"
+
+	v0 "django-threeport-module/pkg/api/v0"
+	client_v0 "django-threeport-module/pkg/client/v0"
 )
 
 // v0DjangoInstanceCreated performs reconciliation when a v0 DjangoInstance
 // has been created.
+//
+// It deploys the workload definition its Django definition produced onto a
+// Kubernetes runtime, then records the resulting workload instance so the
+// attachment is created and the delete path has something to act on.
 func v0DjangoInstanceCreated(
 	r *controller.Reconciler,
 	djangoInstance *v0.DjangoInstance,
 	log *logr.Logger,
 ) (int64, error) {
+	djangoDefinition, err := client_v0.GetDjangoDefinitionByID(
+		r.APIClient,
+		r.APIServer,
+		*djangoInstance.DjangoDefinitionID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"failed to get django definition with ID %d: %w",
+			*djangoInstance.DjangoDefinitionID, err,
+		)
+	}
+
+	// the definition's reconciler creates the workload definition, and the two
+	// reconcile independently. Requeue rather than fail: this is ordering, not
+	// an error, and the definition may be moments behind.
+	if djangoDefinition.KubernetesWorkloadDefinitionID == nil {
+		log.Info("django definition has no kubernetes workload definition yet, requeueing")
+		return 15, nil
+	}
+
+	runtimeInstanceId, err := resolveRuntimeInstanceId(r, djangoInstance)
+	if err != nil {
+		return 0, err
+	}
+
+	// reconciliation runs again on requeue, so an existing workload instance is
+	// adopted rather than duplicated
+	nameQuery := fmt.Sprintf("name=%s", *djangoInstance.Name)
+	existingWorkloadInstances, err := tpclient.GetKubernetesWorkloadInstancesByQueryString(
+		r.APIClient,
+		r.APIServer,
+		nameQuery,
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"failed to check for kubernetes workload instances with name %s: %w",
+			*djangoInstance.Name, err,
+		)
+	}
+
+	var workloadInstance *tpapi.KubernetesWorkloadInstance
+	if len(*existingWorkloadInstances) == 0 {
+		created, err := tpclient.CreateKubernetesWorkloadInstance(
+			r.APIClient,
+			r.APIServer,
+			&tpapi.KubernetesWorkloadInstance{
+				Instance:                       tpapi.Instance{Name: djangoInstance.Name},
+				KubernetesRuntimeInstanceID:    runtimeInstanceId,
+				KubernetesWorkloadDefinitionID: djangoDefinition.KubernetesWorkloadDefinitionID,
+			},
+		)
+		if err != nil {
+			return 0, fmt.Errorf("failed to create kubernetes workload instance: %w", err)
+		}
+		workloadInstance = created
+	} else {
+		workloadInstance = &(*existingWorkloadInstances)[0]
+	}
+
+	// recording the foreign keys is what creates the attachments; the runtime
+	// is recorded too so a resolved default is visible to the user rather than
+	// implicit
+	if _, err := client_v0.UpdateDjangoInstance(
+		r.APIClient,
+		r.APIServer,
+		&v0.DjangoInstance{
+			Common:                       tpapi.Common{ID: djangoInstance.ID},
+			KubernetesRuntimeInstanceID:  runtimeInstanceId,
+			KubernetesWorkloadInstanceID: workloadInstance.ID,
+		},
+	); err != nil {
+		return 0, fmt.Errorf("failed to record kubernetes workload instance on django instance: %w", err)
+	}
+
 	return 0, nil
 }
 
@@ -35,5 +121,45 @@ func v0DjangoInstanceDeleted(
 	djangoInstance *v0.DjangoInstance,
 	log *logr.Logger,
 ) (int64, error) {
+	// an instance that never got as far as deploying has nothing to clean up
+	if djangoInstance.KubernetesWorkloadInstanceID == nil {
+		return 0, nil
+	}
+
+	if _, err := tpclient.DeleteKubernetesWorkloadInstance(
+		r.APIClient,
+		r.APIServer,
+		*djangoInstance.KubernetesWorkloadInstanceID,
+	); err != nil {
+		// already gone is the state we want, and happens on a retried delete
+		if !errors.Is(err, tpclientlib.ErrObjectNotFound) {
+			return 0, fmt.Errorf(
+				"failed to delete kubernetes workload instance with ID %d: %w",
+				*djangoInstance.KubernetesWorkloadInstanceID, err,
+			)
+		}
+	}
+
 	return 0, nil
+}
+
+// resolveRuntimeInstanceId returns the Kubernetes runtime to deploy to: the one
+// named on the instance, or the control plane's default when none is named.
+func resolveRuntimeInstanceId(
+	r *controller.Reconciler,
+	djangoInstance *v0.DjangoInstance,
+) (*uint, error) {
+	if djangoInstance.KubernetesRuntimeInstanceID != nil {
+		return djangoInstance.KubernetesRuntimeInstanceID, nil
+	}
+
+	defaultRuntime, err := tpclient.GetDefaultKubernetesRuntimeInstance(r.APIClient, r.APIServer)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"no kubernetes runtime instance set on the django instance and failed to get the default: %w",
+			err,
+		)
+	}
+
+	return defaultRuntime.ID, nil
 }
