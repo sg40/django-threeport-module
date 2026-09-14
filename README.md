@@ -55,12 +55,14 @@ end to end with a minimal Django image:
 - the workload deploys seven resources: the database secret, its volume claim,
   a PostgreSQL deployment and service, the migration job, and the application
   deployment and service
-- the application starts and stays ready
+- the migration job completes on its first attempt
+- the application starts, stays ready, and reaches its database: the demo
+  image's health endpoint answers `{"status": "ok", "database": "reachable"}`
 - deleting the instance removes the workload, and the API refuses to delete a
   definition that still has instances
 - deleting the definition removes the workload definition
 
-Two things came out of that run and are now fixed.
+Three things came out of those runs and are now fixed.
 
 **The migration job could not import the project.** It failed with
 `ModuleNotFoundError` while the application started fine. `django-admin` is an
@@ -69,10 +71,27 @@ not the project's; a server such as gunicorn adds the working directory itself,
 which is why only the job broke. The job now sets `PYTHONPATH=.`, which assumes
 the image keeps its project at the working directory — the usual layout.
 
+**The migration job raced the database.** Started alongside PostgreSQL, its
+first attempt failed with `connection refused` and only the retry succeeded.
+That left migrations one slow database start from failing outright, since
+`backoffLimit` is 1. The job now waits on an init container running `pg_isready`
+rather than leaning on the retry, which also keeps a genuine migration failure
+from being retried against a healthy database.
+
 **Namespaces were declared and ignored.** The manifests set
 `namespace: default` on every object, and Threeport assigned its own namespace
 per workload instance regardless. The declarations were removed rather than
 left to imply a control the module does not have.
+
+### A note on verifying fixes here
+
+The first attempt at the `PYTHONPATH` fix passed its unit test and was not
+running: the images are rebuilt under the same `v0.0.1-dev` tag, so the kubelet
+kept serving the cached one and the controller went on emitting the old
+manifest. Changes to manifest generation are only proven by redeploying and
+reading the resulting object, not by the test suite. Set the controller's
+`imagePullPolicy` to `Always`, or install with `--debug`, before concluding a
+change took effect.
 
 ## Known limitations
 
