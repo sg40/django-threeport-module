@@ -269,6 +269,24 @@ func djangoYaml(
 						},
 						"spec": map[string]interface{}{
 							"restartPolicy": "Never",
+							// the job and the database start together, so the
+							// first migration attempt would otherwise race the
+							// database and fail with connection refused. Waiting
+							// here rather than raising backoffLimit keeps a
+							// genuine migration failure from being retried.
+							"initContainers": []interface{}{
+								map[string]interface{}{
+									"name":  "wait-for-database",
+									"image": postgresImage,
+									"command": []interface{}{
+										"sh", "-c",
+										fmt.Sprintf(
+											"until pg_isready -h %s -p %d -U %s; do sleep 2; done",
+											dbServiceName, postgresPort, dbUser,
+										),
+									},
+								},
+							},
 							"containers": []interface{}{
 								map[string]interface{}{
 									"name":    "migrate",

@@ -147,3 +147,17 @@ func documentOfKind(t *testing.T, doc string, kind string) string {
 
 	return ""
 }
+
+// TestDjangoYaml_MigrationWaitsForDatabase covers the race where the migration
+// job started alongside the database and failed its first attempt with
+// connection refused. It completed only because the job retried, which leaves
+// migrations one slow database start away from failing outright.
+func TestDjangoYaml_MigrationWaitsForDatabase(t *testing.T) {
+	doc, err := djangoYaml("myapp", "myorg/myapp:v1", "myapp.settings", 1, "dev", 20, true)
+	require.NoError(t, err)
+
+	migrateJob := documentOfKind(t, doc, "Job")
+	require.NotEmpty(t, migrateJob)
+	assert.Contains(t, migrateJob, "wait-for-database")
+	assert.Contains(t, migrateJob, "pg_isready", "the wait has to test the database, not just sleep")
+}
