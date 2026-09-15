@@ -43,6 +43,7 @@ What works today, updated as the module progresses.
 | Config abstractions (`pkg/config`) | generated, still the scaffold |
 | tptctl plugin | builds, installs, and serves its subcommands |
 | Verified against a live control plane | yes — see below |
+| Demo application and deploy example | `examples/` |
 
 ## What has been verified
 
@@ -135,6 +136,75 @@ This module tracks the tip of the Threeport `0.7` branch rather than a release.
 The SDK that generates it emits calls to `ProcessCoreTaggedFields*`, which do
 not exist in `v0.6.1`, the most recent published release. Pin this to a release
 once the `0.7` line has one.
+
+## Trying it out
+
+`examples/django-demo` is a minimal Django application built for this: it
+serves a health endpoint that queries the database, so a successful response
+proves the application started, found its settings, and reached PostgreSQL.
+
+It is deliberately small — two installed apps, no static files, no admin — so a
+failure points at the module rather than at the application.
+
+### 1. Build and publish the demo image
+
+The dev flow pulls from the local registry that `mage dev:localRegistryUp`
+starts on port 5001, not from `ImageNamespace`.
+
+```bash
+cd examples/django-demo
+docker build -t localhost:5001/django-demo:v0.1.0 .
+docker push localhost:5001/django-demo:v0.1.0
+```
+
+### 2. Build and install the module
+
+```bash
+mage build:allImagesDev     # api, database migrator, controller
+mage install:plugin         # puts the tptctl plugin in ~/.threeport/plugins
+tptctl django install -r localhost:5001
+```
+
+`-r localhost:5001` matters: the install defaults to `ImageNamespace`, and the
+dev images are in the local registry.
+
+### 3. Deploy an application
+
+The config abstractions are still the SDK scaffold, so objects go through the
+client library rather than a config file:
+
+```bash
+go run ./examples/deploy -name myapp \
+    -image localhost:5001/django-demo:v0.1.0 \
+    -settings demo.settings
+```
+
+Watch it arrive. Threeport assigns a namespace per workload instance, so find
+it rather than assuming `default`:
+
+```bash
+NS=$(kubectl get ns -o name | grep myapp- | sed 's|namespace/||')
+kubectl -n $NS get pods
+```
+
+Expect three: PostgreSQL running, the migration job `Completed`, and the
+application running. Then reach the application:
+
+```bash
+kubectl -n $NS port-forward svc/myapp 8080:80
+curl localhost:8080
+# {"status": "ok", "database": "reachable"}
+```
+
+### 4. Clean up
+
+```bash
+go run ./examples/deploy -name myapp -delete
+```
+
+The instance is deleted first and its removal is asynchronous, so deleting the
+definition can report that instances still exist. Run it again after a few
+seconds.
 
 ## Development
 
