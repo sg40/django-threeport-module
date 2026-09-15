@@ -86,6 +86,50 @@ func v0DjangoInstanceCreated(
 		workloadInstance = &(*existingWorkloadInstances)[0]
 	}
 
+	// the database credential belongs to this instance, not to the definition
+	// that rendered the manifest: a definition can back many instances, and one
+	// password across all of them means a leak from one reaches every other.
+	// Threeport names the namespace while it reconciles, so it cannot be known
+	// before the workload instance exists — requeue until it has one.
+	namespace, err := workloadNamespace(r, *workloadInstance.ID)
+	if err != nil {
+		return 0, err
+	}
+	if namespace == "" {
+		log.Info("workload instance has no namespace yet, requeueing to create the database secret")
+		return 10, nil
+	}
+
+	kubeClient, err := runtimeKubeClient(r, *runtimeInstanceId)
+	if err != nil {
+		return 0, err
+	}
+
+	// the pods reference this secret by name and stay in
+	// CreateContainerConfigError until it exists, then start on their own
+	secretData, err := databaseSecretData(*djangoDefinition.Name)
+	if err != nil {
+		return 0, err
+	}
+
+	created, err := ensureSecret(
+		kubeClient,
+		namespace,
+		DbSecretName(*djangoDefinition.Name),
+		map[string]string{
+			"app.kubernetes.io/name":       "postgres",
+			"app.kubernetes.io/instance":   *djangoInstance.Name,
+			"app.kubernetes.io/managed-by": "django-threeport-module",
+		},
+		secretData,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to ensure the database secret: %w", err)
+	}
+	if created {
+		log.Info("database secret created", "namespace", namespace)
+	}
+
 	// recording the foreign keys is what creates the attachments; the runtime
 	// is recorded too so a resolved default is visible to the user rather than
 	// implicit

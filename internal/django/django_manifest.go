@@ -31,6 +31,13 @@ const (
 	dbUser = "django"
 )
 
+// DbSecretName returns the name of the Secret holding the database credentials
+// for a definition. The instance reconciler creates it and the manifest
+// references it, so both have to agree on the name.
+func DbSecretName(definitionName string) string {
+	return fmt.Sprintf("%s-db", definitionName)
+}
+
 // djangoYaml returns a YAML manifest describing a Django application: a
 // PostgreSQL database with its storage and credentials, an optional migration
 // job, and the application deployment and service.
@@ -61,43 +68,16 @@ func djangoYaml(
 		}
 	}
 
-	dbSecretName := fmt.Sprintf("%s-db", definitionName)
+	dbSecretName := DbSecretName(definitionName)
 	dbServiceName := fmt.Sprintf("%s-postgres", definitionName)
 
-	// the database password is generated per definition rather than taken from
-	// the user: it never leaves the cluster, and asking for it would put a
-	// credential in the API and in the user's config file
-	dbPassword, err := generatePassword(32)
-	if err != nil {
-		return yamlDoc, fmt.Errorf("failed to generate database password: %w", err)
-	}
-
-	databaseUrl := fmt.Sprintf(
-		"postgres://%s:%s@%s:%d/%s",
-		dbUser, dbPassword, dbServiceName, postgresPort, dbName,
-	)
-
-	dbSecret := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "v1",
-			"kind":       "Secret",
-			"metadata": map[string]interface{}{
-				"name":   dbSecretName,
-				"labels": labels("postgres"),
-			},
-			"type": "Opaque",
-			"stringData": map[string]interface{}{
-				"POSTGRES_DB":       dbName,
-				"POSTGRES_USER":     dbUser,
-				"POSTGRES_PASSWORD": dbPassword,
-				"DATABASE_URL":      databaseUrl,
-			},
-		},
-	}
-	yamlDoc, err = kube.AppendObjectToYamlDoc(dbSecret, yamlDoc)
-	if err != nil {
-		return yamlDoc, fmt.Errorf("failed to append database secret to YAML manifest: %w", err)
-	}
+	// the secret these objects reference is deliberately not created here. It
+	// holds a credential that has to differ per deployment, and this document is
+	// rendered once per definition and shared by every instance of it, so a
+	// secret built here would hand them all the same password. The instance
+	// reconciler creates it in the instance's own namespace instead, which is
+	// also what makes reusing one name across instances safe.
+	var err error
 
 	dbVolumeClaim := &unstructured.Unstructured{
 		Object: map[string]interface{}{
