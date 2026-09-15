@@ -86,11 +86,12 @@ func v0DjangoInstanceCreated(
 		workloadInstance = &(*existingWorkloadInstances)[0]
 	}
 
-	// the database credential belongs to this instance, not to the definition
-	// that rendered the manifest: a definition can back many instances, and one
-	// password across all of them means a leak from one reaches every other.
-	// Threeport names the namespace while it reconciles, so it cannot be known
-	// before the workload instance exists — requeue until it has one.
+	// the credentials belong to this instance, not to the definition that
+	// rendered the manifest: a definition can back many instances, and one
+	// database password or signing key across all of them means a leak from one
+	// reaches every other. Threeport names the namespace while it reconciles,
+	// so it cannot be known before the workload instance exists — requeue until
+	// it has one.
 	namespace, err := workloadNamespace(r, *workloadInstance.ID)
 	if err != nil {
 		return 0, err
@@ -105,29 +106,52 @@ func v0DjangoInstanceCreated(
 		return 0, err
 	}
 
-	// the pods reference this secret by name and stay in
-	// CreateContainerConfigError until it exists, then start on their own
-	secretData, err := databaseSecretData(*djangoDefinition.Name)
+	// the pods reference these secrets by name and stay in
+	// CreateContainerConfigError until they exist, then start on their own
+	dbSecretData, err := databaseSecretData(*djangoDefinition.Name)
+	if err != nil {
+		return 0, err
+	}
+	appSecretData, err := applicationSecretData()
 	if err != nil {
 		return 0, err
 	}
 
-	created, err := ensureSecret(
-		kubeClient,
-		namespace,
-		DbSecretName(*djangoDefinition.Name),
-		map[string]string{
-			"app.kubernetes.io/name":       "postgres",
-			"app.kubernetes.io/instance":   *djangoInstance.Name,
-			"app.kubernetes.io/managed-by": "django-threeport-module",
-		},
-		secretData,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("failed to ensure the database secret: %w", err)
+	instanceSecrets := []struct {
+		description string
+		name        string
+		component   string
+		data        map[string]string
+	}{
+		{"database", DbSecretName(*djangoDefinition.Name), "postgres", dbSecretData},
+		{"application", AppSecretName(*djangoDefinition.Name), "django", appSecretData},
 	}
-	if created {
-		log.Info("database secret created", "namespace", namespace)
+
+	for _, instanceSecret := range instanceSecrets {
+		created, err := ensureSecret(
+			kubeClient,
+			namespace,
+			instanceSecret.name,
+			map[string]string{
+				"app.kubernetes.io/name":       instanceSecret.component,
+				"app.kubernetes.io/instance":   *djangoInstance.Name,
+				"app.kubernetes.io/managed-by": "django-threeport-module",
+			},
+			instanceSecret.data,
+		)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"failed to ensure the %s secret: %w",
+				instanceSecret.description, err,
+			)
+		}
+		if created {
+			log.Info(
+				"instance secret created",
+				"secret", instanceSecret.description,
+				"namespace", namespace,
+			)
+		}
 	}
 
 	// recording the foreign keys is what creates the attachments; the runtime

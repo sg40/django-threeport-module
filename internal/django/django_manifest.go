@@ -38,6 +38,17 @@ func DbSecretName(definitionName string) string {
 	return fmt.Sprintf("%s-db", definitionName)
 }
 
+// AppSecretName returns the name of the Secret holding the application's own
+// credentials, currently SECRET_KEY.
+//
+// It is kept apart from the database secret because the database secret is
+// handed to the postgres container whole, through envFrom. Adding SECRET_KEY
+// there would put Django's signing key in the database container's environment,
+// widening the blast radius of a compromise rather than narrowing it.
+func AppSecretName(definitionName string) string {
+	return fmt.Sprintf("%s-app", definitionName)
+}
+
 // djangoYaml returns a YAML manifest describing a Django application: a
 // PostgreSQL database with its storage and credentials, an optional migration
 // job, and the application deployment and service.
@@ -69,6 +80,7 @@ func djangoYaml(
 	}
 
 	dbSecretName := DbSecretName(definitionName)
+	appSecretName := AppSecretName(definitionName)
 	dbServiceName := fmt.Sprintf("%s-postgres", definitionName)
 
 	// the secret these objects reference is deliberately not created here. It
@@ -201,7 +213,8 @@ func djangoYaml(
 	}
 
 	// the application's environment: the database connection comes from the
-	// same secret postgres was configured with, so the two cannot drift
+	// same secret postgres was configured with, so the two cannot drift, and
+	// the signing key from a secret of its own
 	appEnv := []interface{}{
 		map[string]interface{}{
 			"name": "DATABASE_URL",
@@ -209,6 +222,18 @@ func djangoYaml(
 				"secretKeyRef": map[string]interface{}{
 					"name": dbSecretName,
 					"key":  "DATABASE_URL",
+				},
+			},
+		},
+		// Django refuses to load its settings without a SECRET_KEY, so the
+		// migration job needs it as much as the application does. Both read it
+		// from the same secret, which the instance reconciler writes once.
+		map[string]interface{}{
+			"name": "SECRET_KEY",
+			"valueFrom": map[string]interface{}{
+				"secretKeyRef": map[string]interface{}{
+					"name": appSecretName,
+					"key":  "SECRET_KEY",
 				},
 			},
 		},

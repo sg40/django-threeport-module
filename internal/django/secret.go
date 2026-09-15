@@ -158,6 +158,21 @@ func ensureSecret(
 	return true, nil
 }
 
+// applicationSecretData returns the application's own credentials.
+//
+// SECRET_KEY signs sessions, password reset tokens and anything else Django
+// puts a signature on, so it has to be unique per instance: one key shared
+// across deployments means a token minted by any one of them is accepted by
+// all the others.
+func applicationSecretData() (map[string]string, error) {
+	secretKey, err := generatePassword(48)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate a django secret key: %w", err)
+	}
+
+	return map[string]string{"SECRET_KEY": secretKey}, nil
+}
+
 // databaseSecretData returns the credential the PostgreSQL deployment is
 // configured with and the application connects through.
 //
