@@ -40,7 +40,7 @@ What works today, updated as the module progresses.
 | Kubernetes manifests for the Django app | done |
 | Definition reconciler | done |
 | Instance reconciler | done |
-| Config abstractions (`pkg/config`) | generated, still the scaffold |
+| Config abstractions (`pkg/config`) | done — see `samples/` |
 | tptctl plugin | builds, installs, and serves its subcommands |
 | Verified against a live control plane | yes — see below |
 | Demo application and deploy example | `examples/` |
@@ -116,12 +116,6 @@ reconciler avoids this by adopting an existing workload definition rather than
 rewriting it, but an update path that re-renders will have to read the current
 secret instead.
 
-**The config abstractions are still the SDK scaffold.** `DjangoDefinitionValues`
-carries the generated `Name` and `Age` placeholders, so
-`tptctl django create django-definition -c config.yaml` cannot express the real
-fields yet. Objects have to be created through the client library until that is
-filled in.
-
 **`SubDomain` is stored but not acted on.** Reaching an instance by subdomain
 needs a gateway and a domain name attached to it, which is a second set of
 Threeport objects this module does not create yet. The field is modelled so the
@@ -170,14 +164,23 @@ dev images are in the local registry.
 
 ### 3. Deploy an application
 
-The config abstractions are still the SDK scaffold, so objects go through the
-client library rather than a config file:
-
 ```bash
-go run ./examples/deploy -name myapp \
-    -image localhost:5001/django-demo:v0.1.0 \
-    -settings demo.settings
+tptctl django create django -c samples/django.yaml
 ```
+
+`samples/django.yaml` creates a definition and an instance that share a name -
+a defined instance. `samples/django-definition.yaml` and
+`samples/django-instance.yaml` create either half on its own, which is what to
+use for several instances of one definition.
+
+A config file is read strictly: a field the values objects do not carry is an
+error rather than something quietly ignored. `Image` is required, `Environment`
+has to be usable as a Kubernetes label value, and `Replicas` cannot be negative
+- all three are reported before anything is sent to the API.
+
+`examples/deploy` does the same thing through the client library. It predates
+the config abstractions and is kept because it is a compact example of driving
+the module from Go.
 
 Watch it arrive. Threeport assigns a namespace per workload instance, so find
 it rather than assuming `default`:
@@ -199,11 +202,16 @@ curl localhost:8080
 ### 4. Clean up
 
 ```bash
-go run ./examples/deploy -name myapp -delete
+tptctl django delete django -c samples/django.yaml
 ```
 
-The instance is deleted first and its removal is asynchronous, so deleting the
-definition can report that instances still exist. Run it again after a few
+Deletion is asynchronous: the API marks the instance and the reconciler tears
+the workload down before the row goes away. `DjangoInstanceConfig.Delete` waits
+for that, so removing a defined instance no longer fails on the definition
+still having instances attached.
+
+`examples/deploy` has no such wait, so `go run ./examples/deploy -name myapp
+-delete` can still report that instances exist. Run it again after a few
 seconds.
 
 ## Development

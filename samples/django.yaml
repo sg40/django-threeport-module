@@ -1,0 +1,13 @@
+# A Django definition and instance created together. The pair shares a name,
+# which is what makes it a "defined instance".
+#
+#   tptctl django create django -c samples/django.yaml
+Django:
+  Name: myapp
+  # required: a Django project has no canonical public image, so the module
+  # cannot deploy anything without one
+  Image: localhost:5001/django-demo:v0.1.0
+  SettingsModule: demo.settings
+  # only "prod" is special-cased, for replica and database storage sizing;
+  # anything else gets the development defaults
+  Environment: dev
