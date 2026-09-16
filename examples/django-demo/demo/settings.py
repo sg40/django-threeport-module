@@ -4,7 +4,7 @@ import dj_database_url
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# the module generates this per definition and injects it from a secret
+# the module generates this per instance and injects it from a secret
 SECRET_KEY = os.environ.get("SECRET_KEY", "insecure-demo-key")
 DEBUG = False
 
