@@ -5,7 +5,9 @@ DjangoInstance:
   Name: myapp-dev
   DjangoDefinition:
     Name: myapp
-  # omit KubernetesRuntimeInstance to deploy to the control plane's default
-  # runtime, which is what a single-cluster install wants
-  KubernetesRuntimeInstance:
-    Name: threeport-dev-0
+  # KubernetesRuntimeInstance is optional. Left out, as it is here, the instance
+  # goes to the control plane's default runtime, which is what a single-cluster
+  # install wants. Name one to deploy somewhere else:
+  #
+  #   KubernetesRuntimeInstance:
+  #     Name: my-runtime

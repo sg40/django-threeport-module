@@ -226,7 +226,10 @@ func TestSampleConfigsParse(t *testing.T) {
 				values := into.(*DjangoInstanceConfig).DjangoInstance
 				require.NotNil(t, values.Name)
 				require.NotNil(t, values.DjangoDefinition)
-				require.NotNil(t, values.KubernetesRuntimeInstance)
+				require.Nil(
+					t, values.KubernetesRuntimeInstance,
+					"the sample documents omitting the runtime to get the default; setting one would contradict its own comment",
+				)
 			},
 		},
 	}

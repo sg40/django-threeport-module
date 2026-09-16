@@ -48,15 +48,25 @@ func outputGetv0DjangosCmd(
 	djangos *[]config_v0.DjangoConfig,
 ) error {
 	writer := tabwriter.NewWriter(os.Stdout, 4, 4, 4, ' ', 0)
-	fmt.Fprintln(writer, "NAME\t IMAGE\t ENVIRONMENT\t REPLICAS\t AGE")
+	fmt.Fprintln(writer, "NAME\t IMAGE\t SETTINGS MODULE\t ENVIRONMENT\t REPLICAS\t MIGRATIONS\t KUBERNETES RUNTIME\t SUBDOMAIN\t AGE")
 	for _, django := range *djangos {
 		values := django.Django
+
+		kubernetesRuntimeName := unset
+		if values.KubernetesRuntimeInstance != nil {
+			kubernetesRuntimeName = str(values.KubernetesRuntimeInstance.Name)
+		}
+
 		fmt.Fprintln(
 			writer,
 			str(values.Name), "\t",
 			str(values.Image), "\t",
+			str(values.SettingsModule), "\t",
 			str(values.Environment), "\t",
 			intStr(values.Replicas), "\t",
+			boolStr(values.RunMigrations), "\t",
+			kubernetesRuntimeName, "\t",
+			str(values.SubDomain), "\t",
 			str(values.Age),
 		)
 	}

@@ -8,10 +8,19 @@ import (
 	errors "errors"
 	"fmt"
 	tpapi_v0 "github.com/threeport/threeport/pkg/api/v0"
+	tpclientlib "github.com/threeport/threeport/pkg/client/lib/v0"
 	tpclient_v0 "github.com/threeport/threeport/pkg/client/v0"
 	tpconfig_v0 "github.com/threeport/threeport/pkg/config/v0"
 	util "github.com/threeport/threeport/pkg/util/v0"
 	"net/http"
+)
+
+// deletionWaitAttempts and deletionWaitSeconds bound the wait for a deleted
+// instance to leave the API. They are variables rather than constants so a test
+// can observe a timeout without sitting through a minute of it.
+var (
+	deletionWaitAttempts = 60
+	deletionWaitSeconds  = 1
 )
 
 // DjangoInstanceConfig is a config abstraction for the DjangoInstance API object.
@@ -68,43 +77,58 @@ func (d *DjangoInstanceConfig) Get(
 		djangoInstances = allDjangoInstances
 	}
 
-	// assemble config objects from API objects
+	// assemble config objects from API objects. Instances commonly share a
+	// runtime and a definition, so resolved names are kept rather than fetched
+	// again for every row.
+	kubernetesRuntimeNames := make(map[uint]*string)
+	djangoDefinitionNames := make(map[uint]*string)
+
 	var djangoInstanceConfigs []DjangoInstanceConfig
 	for _, djangoInstance := range *djangoInstances {
 		// the runtime and definition are foreign keys on the API object; the
 		// config abstraction exists so the user sees names instead
 		var kubernetesRuntimeInstanceValues *tpconfig_v0.KubernetesRuntimeInstanceValues
 		if djangoInstance.KubernetesRuntimeInstanceID != nil {
-			kubernetesRuntimeInstance, err := tpclient_v0.GetKubernetesRuntimeInstanceByID(
-				apiClient,
-				apiEndpoint,
-				*djangoInstance.KubernetesRuntimeInstanceID,
-			)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"failed to get kubernetes runtime instance with ID %d: %w",
-					*djangoInstance.KubernetesRuntimeInstanceID, err,
+			id := *djangoInstance.KubernetesRuntimeInstanceID
+			name, cached := kubernetesRuntimeNames[id]
+			if !cached {
+				kubernetesRuntimeInstance, err := tpclient_v0.GetKubernetesRuntimeInstanceByID(
+					apiClient,
+					apiEndpoint,
+					id,
 				)
+				if err != nil {
+					return nil, fmt.Errorf(
+						"failed to get kubernetes runtime instance with ID %d: %w",
+						id, err,
+					)
+				}
+				name = kubernetesRuntimeInstance.Name
+				kubernetesRuntimeNames[id] = name
 			}
-			kubernetesRuntimeInstanceValues = &tpconfig_v0.KubernetesRuntimeInstanceValues{
-				Name: kubernetesRuntimeInstance.Name,
-			}
+			kubernetesRuntimeInstanceValues = &tpconfig_v0.KubernetesRuntimeInstanceValues{Name: name}
 		}
 
 		var djangoDefinitionValues *DjangoDefinitionValues
 		if djangoInstance.DjangoDefinitionID != nil {
-			djangoDefinition, err := client_v0.GetDjangoDefinitionByID(
-				apiClient,
-				apiEndpoint,
-				*djangoInstance.DjangoDefinitionID,
-			)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"failed to get django definition with ID %d: %w",
-					*djangoInstance.DjangoDefinitionID, err,
+			id := *djangoInstance.DjangoDefinitionID
+			name, cached := djangoDefinitionNames[id]
+			if !cached {
+				djangoDefinition, err := client_v0.GetDjangoDefinitionByID(
+					apiClient,
+					apiEndpoint,
+					id,
 				)
+				if err != nil {
+					return nil, fmt.Errorf(
+						"failed to get django definition with ID %d: %w",
+						id, err,
+					)
+				}
+				name = djangoDefinition.Name
+				djangoDefinitionNames[id] = name
 			}
-			djangoDefinitionValues = &DjangoDefinitionValues{Name: djangoDefinition.Name}
+			djangoDefinitionValues = &DjangoDefinitionValues{Name: name}
 		}
 
 		djangoInstanceConfig := DjangoInstanceConfig{
@@ -314,13 +338,27 @@ func (d *DjangoInstanceConfig) Delete(
 	// returning immediately would let a caller deleting a defined instance try
 	// to remove the definition while this instance still refers to it - which
 	// the API refuses. Threeport's own instance configs wait the same way.
-	util.Retry(60, 1, func() error {
-		if _, err := client_v0.GetDjangoInstanceByName(apiClient, apiEndpoint, *djangoInstanceValues.Name); err == nil {
+	if err := util.Retry(deletionWaitAttempts, deletionWaitSeconds, func() error {
+		_, err := client_v0.GetDjangoInstanceByName(apiClient, apiEndpoint, *djangoInstanceValues.Name)
+		if err == nil {
 			return errors.New("django instance not deleted")
 		}
 
-		return nil
-	})
+		// only an explicit not found proves the row is gone. Any other error is
+		// the API failing to answer, which says nothing about the instance, and
+		// reading it as success would let a caller delete the definition while
+		// this instance still refers to it.
+		if errors.Is(err, tpclientlib.ErrObjectNotFound) {
+			return nil
+		}
+
+		return fmt.Errorf("failed to check whether the django instance is deleted: %w", err)
+	}); err != nil {
+		return nil, fmt.Errorf(
+			"gave up waiting for django instance %s to be deleted: %w",
+			*djangoInstanceValues.Name, err,
+		)
+	}
 
 	// construct deleted django instance config
 	deletedDjangoInstanceConfig := &DjangoInstanceConfig{
