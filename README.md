@@ -174,9 +174,15 @@ a defined instance. `samples/django-definition.yaml` and
 use for several instances of one definition.
 
 A config file is read strictly: a field the values objects do not carry is an
-error rather than something quietly ignored. `Image` is required, `Environment`
-has to be usable as a Kubernetes label value, and `Replicas` cannot be negative
-- all three are reported before anything is sent to the API.
+error rather than something quietly ignored. `Image` is required, `Name` and
+`Environment` have to be usable as Kubernetes label values, and `Replicas`
+cannot be negative - all of them reported before anything is sent to the API.
+
+A replace keeps an instance on the runtime it is already on. Omitting
+`KubernetesRuntimeInstance` means "the default" on a create and "leave it where
+it is" on a replace, so editing an unrelated field in a config that does not
+name a runtime cannot move a running workload to another cluster. Naming a
+different one is reported rather than performed.
 
 `examples/deploy` does the same thing through the client library. It predates
 the config abstractions and is kept because it is a compact example of driving

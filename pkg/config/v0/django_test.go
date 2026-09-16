@@ -36,6 +36,14 @@ func TestDjangoDefinitionConfig_Validate(t *testing.T) {
 			wantErr: "Name",
 		},
 		{
+			name: "the name has to be usable as a label value",
+			values: DjangoDefinitionValues{
+				Name:  util.Ptr("My App/v2"),
+				Image: util.Ptr("myorg/myapp:v1"),
+			},
+			wantErr: "Name",
+		},
+		{
 			name: "the environment has to be usable as a label value",
 			values: DjangoDefinitionValues{
 				Name:        util.Ptr("myapp"),
@@ -242,4 +250,95 @@ func TestSampleConfigsParse(t *testing.T) {
 			test.assert(t, test.into)
 		})
 	}
+}
+
+// TestDjangoConfig_CreateReportsAMissingName covers the error message wrapping
+// Validate. A missing name is one of the things Validate reports, so reading it
+// to describe the failure crashed tptctl with a stack trace instead of printing
+// the missing field.
+func TestDjangoConfig_CreateReportsAMissingName(t *testing.T) {
+	configs := []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "django definition",
+			call: func() error {
+				config := DjangoDefinitionConfig{
+					DjangoDefinition: DjangoDefinitionValues{Image: util.Ptr("myorg/myapp:v1")},
+				}
+				_, err := config.Create(nil, "")
+
+				return err
+			},
+		},
+		{
+			name: "django instance",
+			call: func() error {
+				config := DjangoInstanceConfig{
+					DjangoInstance: DjangoInstanceValues{
+						DjangoDefinition: &DjangoDefinitionValues{Name: util.Ptr("myapp")},
+					},
+				}
+				_, err := config.Create(nil, "")
+
+				return err
+			},
+		},
+	}
+
+	for _, config := range configs {
+		t.Run(config.name, func(t *testing.T) {
+			var err error
+			require.NotPanics(t, func() { err = config.call() })
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "missing required field in config: Name")
+		})
+	}
+}
+
+// TestDjangoConfig_DeleteReportsAMissingName covers the same dereference on the
+// delete path, which does not run Validate at all and read the name straight
+// out of the config.
+func TestDjangoConfig_DeleteReportsAMissingName(t *testing.T) {
+	configs := []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "django definition",
+			call: func() error {
+				config := DjangoDefinitionConfig{}
+				_, err := config.Delete(nil, "")
+
+				return err
+			},
+		},
+		{
+			name: "django instance",
+			call: func() error {
+				config := DjangoInstanceConfig{}
+				_, err := config.Delete(nil, "")
+
+				return err
+			},
+		},
+	}
+
+	for _, config := range configs {
+		t.Run(config.name, func(t *testing.T) {
+			var err error
+			require.NotPanics(t, func() { err = config.call() })
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "missing required field in config: Name")
+		})
+	}
+}
+
+// TestDjangoName covers the helper the operation closures use to describe a
+// config in an error. They wrap the failure Validate returns, so they have to
+// render a name that is absent.
+func TestDjangoName(t *testing.T) {
+	assert.Equal(t, "with name myapp", djangoName(util.Ptr("myapp")))
+	assert.Equal(t, "with no name", djangoName(nil))
 }

@@ -107,7 +107,10 @@ func (d *DjangoDefinitionConfig) Create(
 
 	// validate config
 	if err := d.Validate(); err != nil {
-		return nil, fmt.Errorf("failed to validate values for django definition with name %s: %w", *djangoDefinitionValues.Name, err)
+		// the name is not interpolated here: a missing name is one of the things
+		// Validate reports, so reading it to describe the failure would panic on
+		// exactly the config this line exists to explain
+		return nil, fmt.Errorf("failed to validate values for django definition: %w", err)
 	}
 
 	// construct django definition object. Optional fields are passed through as
@@ -227,6 +230,12 @@ func (d *DjangoDefinitionConfig) Delete(
 ) (*DjangoDefinitionConfig, error) {
 	djangoDefinitionValues := d.DjangoDefinition
 
+	// delete works by name, and unlike create it does not run Validate first,
+	// so the name is checked here rather than dereferenced blind
+	if djangoDefinitionValues.Name == nil {
+		return nil, errors.New("missing required field in config: Name")
+	}
+
 	// get django definition by name
 	djangoDefinition, err := client_v0.GetDjangoDefinitionByName(
 		apiClient,
@@ -265,6 +274,18 @@ func (d *DjangoDefinitionConfig) Validate() error {
 	// ensure name is set
 	if djangoDefinitionValues.Name == nil {
 		multiError.AppendError(errors.New("missing required field in config: Name"))
+	}
+
+	// the name is the app.kubernetes.io/instance label on every object the
+	// module renders, and also the prefix of the resource names, so it is
+	// subject to the same late failure the environment check prevents
+	if djangoDefinitionValues.Name != nil {
+		if errs := validation.IsValidLabelValue(*djangoDefinitionValues.Name); len(errs) > 0 {
+			multiError.AppendError(fmt.Errorf(
+				"invalid value in config for Name: %s: %s",
+				*djangoDefinitionValues.Name, strings.Join(errs, "; "),
+			))
+		}
 	}
 
 	// the API rejects a definition without an image, but it does so with a

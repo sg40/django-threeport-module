@@ -155,7 +155,9 @@ func (d *DjangoInstanceConfig) Create(
 
 	// validate config
 	if err := d.Validate(); err != nil {
-		return nil, fmt.Errorf("failed to validate values for django instance with name %s: %w", *djangoInstanceValues.Name, err)
+		// see the note in DjangoDefinitionConfig.Create: a missing name is what
+		// Validate reports, so it cannot be read to describe the failure
+		return nil, fmt.Errorf("failed to validate values for django instance: %w", err)
 	}
 
 	// resolve the runtime and definition the config names into the foreign keys
@@ -243,14 +245,24 @@ func (d *DjangoInstanceConfig) Replace(
 		return nil, fmt.Errorf("failed to find django instance with name %s: %w", name, err)
 	}
 
-	// resolve the names the config carries into foreign keys
-	kubernetesRuntimeInstance, err := getKubernetesRuntimeInstanceByNameOrDefault(
+	// resolve the names the config carries into foreign keys. Unlike create,
+	// this keeps the runtime the instance is already on rather than falling back
+	// to the default, which would move the workload to another cluster on an
+	// edit to an unrelated field.
+	kubernetesRuntimeInstance, moved, err := getKubernetesRuntimeInstanceForReplace(
 		apiClient,
 		apiEndpoint,
 		djangoInstanceValues.KubernetesRuntimeInstance,
+		existingDjangoInstance.KubernetesRuntimeInstanceID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get kubernetes runtime instance: %w", err)
+	}
+	if moved {
+		return nil, fmt.Errorf(
+			"a django instance may not be moved from its current runtime to %s - create a new instance there instead",
+			*djangoInstanceValues.KubernetesRuntimeInstance.Name,
+		)
 	}
 
 	djangoDefinition, err := client_v0.GetDjangoDefinitionByName(
@@ -312,6 +324,12 @@ func (d *DjangoInstanceConfig) Delete(
 	apiEndpoint string,
 ) (*DjangoInstanceConfig, error) {
 	djangoInstanceValues := d.DjangoInstance
+
+	// delete works by name, and unlike create it does not run Validate first,
+	// so the name is checked here rather than dereferenced blind
+	if djangoInstanceValues.Name == nil {
+		return nil, errors.New("missing required field in config: Name")
+	}
 
 	// get django instance by name
 	djangoInstance, err := client_v0.GetDjangoInstanceByName(

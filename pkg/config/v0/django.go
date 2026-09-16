@@ -140,6 +140,17 @@ func (d *DjangoConfig) Delete(
 	return nil, nil
 }
 
+// djangoName describes a config's name for an error message. Validate reports a
+// missing name, and these messages wrap the failure Validate returns, so the
+// name has to be readable even when it is the thing that is absent.
+func djangoName(name *string) string {
+	if name == nil {
+		return "with no name"
+	}
+
+	return fmt.Sprintf("with name %s", *name)
+}
+
 // GetOperations returns a slice of operations used to get, create, replace or delete
 // a django defined instance.
 func (d *DjangoConfig) GetOperations(
@@ -169,7 +180,7 @@ func (d *DjangoConfig) GetOperations(
 		Create: func() error {
 			djangoDefinition, err := djangoDefinitionConfig.Create(apiClient, apiEndpoint)
 			if err != nil {
-				return fmt.Errorf("failed to create django definition with name %s: %w", *djangoValues.Name, err)
+				return fmt.Errorf("failed to create django definition %s: %w", djangoName(djangoValues.Name), err)
 			}
 			operatedDjangoDefinitions = append(operatedDjangoDefinitions, *djangoDefinition)
 			return nil
@@ -177,7 +188,7 @@ func (d *DjangoConfig) GetOperations(
 		Delete: func() error {
 			_, err = djangoDefinitionConfig.Delete(apiClient, apiEndpoint)
 			if err != nil {
-				return fmt.Errorf("failed to delete django definition with name %s: %w", *djangoValues.Name, err)
+				return fmt.Errorf("failed to delete django definition %s: %w", djangoName(djangoValues.Name), err)
 			}
 			return nil
 		},
@@ -215,7 +226,7 @@ func (d *DjangoConfig) GetOperations(
 		Create: func() error {
 			djangoInstance, err := djangoInstanceConfig.Create(apiClient, apiEndpoint)
 			if err != nil {
-				return fmt.Errorf("failed to create django instance with name %s: %w", *djangoValues.Name, err)
+				return fmt.Errorf("failed to create django instance %s: %w", djangoName(djangoValues.Name), err)
 			}
 			operatedDjangoInstances = append(operatedDjangoInstances, *djangoInstance)
 			return nil
@@ -223,7 +234,7 @@ func (d *DjangoConfig) GetOperations(
 		Delete: func() error {
 			_, err = djangoInstanceConfig.Delete(apiClient, apiEndpoint)
 			if err != nil {
-				return fmt.Errorf("failed to delete django instance with name %s: %w", *djangoValues.Name, err)
+				return fmt.Errorf("failed to delete django instance %s: %w", djangoName(djangoValues.Name), err)
 			}
 			return nil
 		},

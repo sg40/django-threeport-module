@@ -1,6 +1,7 @@
 package v0
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -49,4 +50,56 @@ func getKubernetesRuntimeInstanceByNameOrDefault(
 	}
 
 	return kubernetesRuntimeInstance, nil
+}
+
+// getKubernetesRuntimeInstanceForReplace returns the runtime a replace should
+// keep the instance on, and whether the config named a different one.
+//
+// Replace is a full replacement, so a config that omits the runtime would
+// otherwise fall back to the default and silently move the workload to another
+// cluster - on what looks to the user like an edit to an unrelated field. The
+// instance's current runtime is kept instead, and naming a different one is
+// reported rather than acted on.
+//
+// Threeport has getKubernetesRuntimeInstanceAndCheckId for this but does not
+// export it, and its boolean reads the other way round: it is true when the
+// runtime is unchanged. All five of its call sites treat that as "moved", so
+// they reject the ordinary case and fall through to a nil dereference on the
+// one they meant to catch. The boolean here is named for what it reports.
+func getKubernetesRuntimeInstanceForReplace(
+	apiClient *http.Client,
+	apiEndpoint string,
+	values *tpconfig_v0.KubernetesRuntimeInstanceValues,
+	currentId *uint,
+) (*tpapi_v0.KubernetesRuntimeInstance, bool, error) {
+	if currentId == nil {
+		return nil, false, errors.New("the existing django instance has no kubernetes runtime instance")
+	}
+
+	current, err := tpclient_v0.GetKubernetesRuntimeInstanceByID(apiClient, apiEndpoint, *currentId)
+	if err != nil {
+		return nil, false, fmt.Errorf(
+			"failed to get the kubernetes runtime instance with ID %d the django instance is on: %w",
+			*currentId, err,
+		)
+	}
+
+	// no runtime named: the instance stays where it is
+	if values == nil || values.Name == nil || *values.Name == "" {
+		return current, false, nil
+	}
+
+	named, err := tpclient_v0.GetKubernetesRuntimeInstanceByName(apiClient, apiEndpoint, *values.Name)
+	if err != nil {
+		return nil, false, fmt.Errorf(
+			"failed to get kubernetes runtime instance with name %s: %w",
+			*values.Name, err,
+		)
+	}
+
+	if named.ID == nil || *named.ID != *currentId {
+		return named, true, nil
+	}
+
+	return current, false, nil
 }
