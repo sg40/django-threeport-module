@@ -78,8 +78,8 @@ func (d *DjangoConfig) Create(
 	// execute create operations
 	if err := operations.Create(); err != nil {
 		return nil, fmt.Errorf(
-			"failed to execute create operations for django defined instance with name %s: %w",
-			*d.Django.Name,
+			"failed to execute create operations for django defined instance %s: %w",
+			djangoName(d.Django.Name),
 			err,
 		)
 	}
@@ -131,8 +131,8 @@ func (d *DjangoConfig) Delete(
 	// execute delete operations
 	if err := operations.Delete(); err != nil {
 		return nil, fmt.Errorf(
-			"failed to execute delete operations for django defined instance with name %s: %w",
-			*d.Django.Name,
+			"failed to execute delete operations for django defined instance %s: %w",
+			djangoName(d.Django.Name),
 			err,
 		)
 	}

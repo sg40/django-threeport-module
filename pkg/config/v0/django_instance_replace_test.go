@@ -13,6 +13,10 @@ import (
 	util "github.com/threeport/threeport/pkg/util/v0"
 )
 
+// sentWorkloadInstanceId records the workload instance the last replace carried,
+// or 0 when it carried none.
+var sentWorkloadInstanceId uint
+
 // replaceAPI serves the calls Replace makes. The django instance it holds is on
 // runtime 7, the control plane's default runtime is 5, and 9 is a third cluster
 // the user could name. It records the runtime ID the replace ends up sending.
@@ -35,10 +39,14 @@ func replaceAPI(t *testing.T, sent *uint) *httptest.Server {
 				fmt.Sscanf(string(body)[index+len(`"KubernetesRuntimeInstanceID":`):], "%d", &id)
 				*sent = id
 			}
+			sentWorkloadInstanceId = 0
+			if index := strings.Index(string(body), `"KubernetesWorkloadInstanceID":`); index >= 0 {
+				fmt.Sscanf(string(body)[index+len(`"KubernetesWorkloadInstanceID":`):], "%d", &sentWorkloadInstanceId)
+			}
 			fmt.Fprint(w, `{"Data":[{"ID":1,"Name":"myapp","CreatedAt":"2026-09-01T00:00:00Z"}]}`)
 
 		case strings.Contains(path, "django-instances"):
-			fmt.Fprint(w, `{"Data":[{"ID":1,"Name":"myapp","KubernetesRuntimeInstanceID":7,"DjangoDefinitionID":3}]}`)
+			fmt.Fprint(w, `{"Data":[{"ID":1,"Name":"myapp","KubernetesRuntimeInstanceID":7,"DjangoDefinitionID":3,"KubernetesWorkloadInstanceID":42}]}`)
 
 		case strings.Contains(path, "django-definitions"):
 			fmt.Fprint(w, `{"Data":[{"ID":3,"Name":"myapp"}]}`)
@@ -120,4 +128,28 @@ func TestDjangoInstanceConfig_Replace_AcceptsTheSameRuntimeNamed(t *testing.T) {
 	_, err := config.Replace(server.Client(), apiAddr(server), "myapp")
 	require.NoError(t, err)
 	assert.Equal(t, uint(7), sent)
+}
+
+// TestDjangoInstanceConfig_Replace_CarriesTheWorkloadInstance covers the owned
+// relationship the reconciler sets. A replacement is a full PUT, so leaving the
+// workload instance out asks the API to clear it - and an owned relationship is
+// immutable once set, so the API rejects the whole replace. Every replace of a
+// reconciled instance failed this way.
+func TestDjangoInstanceConfig_Replace_CarriesTheWorkloadInstance(t *testing.T) {
+	var sent uint
+	server := replaceAPI(t, &sent)
+	defer server.Close()
+
+	config := DjangoInstanceConfig{DjangoInstance: DjangoInstanceValues{
+		Name:             util.Ptr("myapp"),
+		SubDomain:        util.Ptr("www"),
+		DjangoDefinition: &DjangoDefinitionValues{Name: util.Ptr("myapp")},
+	}}
+
+	_, err := config.Replace(server.Client(), apiAddr(server), "myapp")
+	require.NoError(t, err)
+	assert.Equal(
+		t, uint(42), sentWorkloadInstanceId,
+		"the replacement has to carry the workload instance the reconciler set, or the API refuses it",
+	)
 }

@@ -116,6 +116,15 @@ reconciler avoids this by adopting an existing workload definition rather than
 rewriting it, but an update path that re-renders will have to read the current
 secret instead.
 
+**A replace updates the API object but not the running workload.** Both update
+reconcilers are unimplemented stubs, so `tptctl django replace django-definition`
+changes the stored definition and reports success while the deployment goes on
+running what the previous definition rendered: a definition replaced from `dev`
+to `prod` reads as `prod` in `get` and still runs one replica labelled `dev`.
+Until the update reconcilers are written, changing a deployed application means
+deleting and recreating it. Filling in the config abstractions is what made this
+path reachable - before that a config file could not express the fields at all.
+
 **`SubDomain` is stored but not acted on.** Reaching an instance by subdomain
 needs a gateway and a domain name attached to it, which is a second set of
 Threeport objects this module does not create yet. The field is modelled so the

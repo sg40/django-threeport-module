@@ -290,6 +290,12 @@ func (d *DjangoInstanceConfig) Replace(
 		KubernetesRuntimeInstanceID: kubernetesRuntimeInstance.ID,
 		SubDomain:                   djangoInstanceValues.SubDomain,
 		DjangoDefinitionID:          djangoDefinition.ID,
+
+		// the workload instance is an owned relationship the reconciler sets,
+		// not something the user configures. A replacement that left it out
+		// would be asking the API to clear it, which it refuses because an owned
+		// relationship is immutable once set.
+		KubernetesWorkloadInstanceID: existingDjangoInstance.KubernetesWorkloadInstanceID,
 	}
 
 	// replace django instance

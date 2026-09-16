@@ -195,6 +195,12 @@ func (d *DjangoDefinitionConfig) Replace(
 		Environment:    djangoDefinitionValues.Environment,
 		Replicas:       djangoDefinitionValues.Replicas,
 		RunMigrations:  djangoDefinitionValues.RunMigrations,
+
+		// the workload definition is an owned relationship the reconciler sets,
+		// not something the user configures. A replacement that left it out
+		// would be asking the API to clear it, which it refuses because an owned
+		// relationship is immutable once set.
+		KubernetesWorkloadDefinitionID: existingDjangoDefinition.KubernetesWorkloadDefinitionID,
 	}
 
 	// replace django definition

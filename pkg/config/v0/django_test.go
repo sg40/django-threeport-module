@@ -342,3 +342,44 @@ func TestDjangoName(t *testing.T) {
 	assert.Equal(t, "with name myapp", djangoName(util.Ptr("myapp")))
 	assert.Equal(t, "with no name", djangoName(nil))
 }
+
+// TestDjangoConfig_ReportsAMissingNameFromTheCombinedPath covers
+// `tptctl django create django -c config.yaml`, which goes through DjangoConfig
+// rather than the definition and instance configs directly. Guarding only the
+// inner operations moved the dereference up a level rather than removing it:
+// the operation fails, and the wrapper that reports the failure read the name
+// the failure is about.
+func TestDjangoConfig_ReportsAMissingNameFromTheCombinedPath(t *testing.T) {
+	operations := []struct {
+		name string
+		call func(config DjangoConfig) error
+	}{
+		{
+			name: "create",
+			call: func(config DjangoConfig) error {
+				_, err := config.Create(nil, "")
+
+				return err
+			},
+		},
+		{
+			name: "delete",
+			call: func(config DjangoConfig) error {
+				_, err := config.Delete(nil, "")
+
+				return err
+			},
+		},
+	}
+
+	for _, operation := range operations {
+		t.Run(operation.name, func(t *testing.T) {
+			config := DjangoConfig{Django: DjangoValues{Image: util.Ptr("myorg/myapp:v1")}}
+
+			var err error
+			require.NotPanics(t, func() { err = operation.call(config) })
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "with no name")
+		})
+	}
+}
