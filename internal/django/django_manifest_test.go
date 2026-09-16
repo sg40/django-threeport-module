@@ -83,6 +83,94 @@ func TestDjangoYaml_ReferencesTheInstanceSecret(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, doc, DbSecretName("myapp"), "the deployments have to reference the name the reconciler creates")
+	assert.Contains(t, doc, AppSecretName("myapp"), "the deployments have to reference the name the reconciler creates")
+}
+
+// TestDjangoYaml_SecretKeyReachesTheApplicationAndMigrations covers what the
+// manifest wires SECRET_KEY into. Django will not load its settings without
+// one, so the migration job needs it as much as the application does.
+func TestDjangoYaml_SecretKeyReachesTheApplicationAndMigrations(t *testing.T) {
+	doc, err := djangoYaml("myapp", "myorg/myapp:v1", "myapp.settings", 1, "dev", 20, true)
+	require.NoError(t, err)
+
+	for _, container := range []string{"django", "migrate"} {
+		name, key := secretKeyRefFor(t, doc, container, "SECRET_KEY")
+		assert.Equal(t, AppSecretName("myapp"), name, "container %q reads SECRET_KEY from the wrong secret", container)
+		assert.Equal(t, "SECRET_KEY", key, "container %q reads the wrong key", container)
+	}
+
+	// the database secret is handed to postgres whole through envFrom, so a
+	// signing key placed there would end up in the database container too
+	postgresName, _ := secretKeyRefFor(t, doc, "postgres", "SECRET_KEY")
+	assert.Empty(t, postgresName, "the database container has no business holding the signing key")
+}
+
+// secretKeyRefFor returns the secret name and key a named container reads an
+// environment variable from, or empty strings when it does not read that
+// variable at all.
+func secretKeyRefFor(t *testing.T, doc string, containerName string, variable string) (string, string) {
+	t.Helper()
+
+	for _, chunk := range strings.Split(doc, "\n---\n") {
+		if strings.TrimSpace(chunk) == "" {
+			continue
+		}
+		var parsed struct {
+			Spec struct {
+				Template struct {
+					Spec struct {
+						Containers []struct {
+							Name string `json:"name"`
+							Env  []struct {
+								Name      string `json:"name"`
+								ValueFrom struct {
+									SecretKeyRef struct {
+										Name string `json:"name"`
+										Key  string `json:"key"`
+									} `json:"secretKeyRef"`
+								} `json:"valueFrom"`
+							} `json:"env"`
+						} `json:"containers"`
+					} `json:"spec"`
+				} `json:"template"`
+			} `json:"spec"`
+		}
+		require.NoError(t, yaml.Unmarshal([]byte(chunk), &parsed))
+
+		for _, container := range parsed.Spec.Template.Spec.Containers {
+			if container.Name != containerName {
+				continue
+			}
+			for _, env := range container.Env {
+				if env.Name == variable {
+					return env.ValueFrom.SecretKeyRef.Name, env.ValueFrom.SecretKeyRef.Key
+				}
+			}
+		}
+	}
+
+	return "", ""
+}
+
+// TestApplicationSecretData covers the signing key the reconciler writes. A key
+// shared between instances means a token minted by one is accepted by all the
+// others, which is the whole reason it cannot live on the definition.
+func TestApplicationSecretData(t *testing.T) {
+	data, err := applicationSecretData()
+	require.NoError(t, err)
+
+	assert.NotEmpty(t, data["SECRET_KEY"])
+	assert.GreaterOrEqual(
+		t, len(data["SECRET_KEY"]), 50,
+		"django's own get_random_secret_key produces 50 characters; do not go below it",
+	)
+
+	other, err := applicationSecretData()
+	require.NoError(t, err)
+	assert.NotEqual(
+		t, data["SECRET_KEY"], other["SECRET_KEY"],
+		"two instances of one definition must not share a signing key",
+	)
 }
 
 // TestDatabaseSecretData covers the credential the reconciler writes. The
