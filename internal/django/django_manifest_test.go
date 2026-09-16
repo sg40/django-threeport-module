@@ -39,7 +39,10 @@ func TestDjangoYaml_Resources(t *testing.T) {
 
 	kinds := kindsIn(t, doc)
 
-	assert.Contains(t, kinds, "Secret")
+	assert.NotContains(
+		t, kinds, "Secret",
+		"the credential is created per instance by the reconciler, not rendered into the shared manifest",
+	)
 	assert.Contains(t, kinds, "PersistentVolumeClaim")
 	assert.Contains(t, kinds, "Job", "migrations were requested")
 	assert.Contains(t, kinds, "Service")
@@ -70,6 +73,40 @@ func TestDjangoYaml_SettingsModuleOmitted(t *testing.T) {
 	withoutSettings, err := djangoYaml("myapp", "myorg/myapp:v1", "", 1, "dev", 20, false)
 	require.NoError(t, err)
 	assert.NotContains(t, withoutSettings, "DJANGO_SETTINGS_MODULE")
+}
+
+// TestDjangoYaml_ReferencesTheInstanceSecret covers the contract between the
+// manifest and the instance reconciler: the manifest names a secret it does not
+// create, so both sides have to derive the same name.
+func TestDjangoYaml_ReferencesTheInstanceSecret(t *testing.T) {
+	doc, err := djangoYaml("myapp", "myorg/myapp:v1", "myapp.settings", 1, "dev", 20, false)
+	require.NoError(t, err)
+
+	assert.Contains(t, doc, DbSecretName("myapp"), "the deployments have to reference the name the reconciler creates")
+}
+
+// TestDatabaseSecretData covers the credential the reconciler writes. The
+// PostgreSQL deployment and the application read the same secret, so the
+// password in DATABASE_URL has to be the one POSTGRES_PASSWORD sets.
+func TestDatabaseSecretData(t *testing.T) {
+	data, err := databaseSecretData("myapp")
+	require.NoError(t, err)
+
+	assert.Equal(t, dbName, data["POSTGRES_DB"])
+	assert.Equal(t, dbUser, data["POSTGRES_USER"])
+	assert.NotEmpty(t, data["POSTGRES_PASSWORD"])
+	assert.Contains(
+		t, data["DATABASE_URL"], data["POSTGRES_PASSWORD"],
+		"the connection string has to carry the password the database is configured with",
+	)
+	assert.Contains(t, data["DATABASE_URL"], "myapp-postgres", "it has to point at this definition's database service")
+
+	other, err := databaseSecretData("myapp")
+	require.NoError(t, err)
+	assert.NotEqual(
+		t, data["POSTGRES_PASSWORD"], other["POSTGRES_PASSWORD"],
+		"two instances of one definition must not share a password",
+	)
 }
 
 // TestGeneratePassword covers the credential the database and the application

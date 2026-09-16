@@ -86,19 +86,76 @@ func v0DjangoInstanceCreated(
 		workloadInstance = &(*existingWorkloadInstances)[0]
 	}
 
-	// recording the foreign keys is what creates the attachments; the runtime
-	// is recorded too so a resolved default is visible to the user rather than
-	// implicit
+	// the runtime comes off the workload instance rather than from resolving
+	// the default again. A default can change between reconcile passes, and the
+	// workload is already deployed to whichever runtime it was created with:
+	// resolving again would put the secret in a cluster the workload is not in.
+	deployedRuntimeInstanceId := workloadInstance.KubernetesRuntimeInstanceID
+	if deployedRuntimeInstanceId == nil {
+		return 0, errors.New("kubernetes workload instance has no kubernetes runtime instance")
+	}
+
+	// the foreign keys are recorded before anything that can requeue. The
+	// workload instance already exists at this point, and the delete handler
+	// has nothing to clean up until its ID is on the django instance: a delete
+	// arriving while the secret work is still retrying would otherwise leave
+	// the workload and its resources behind. Recording it also creates the
+	// attachments, and makes a resolved default runtime visible to the user
+	// rather than implicit.
 	if _, err := client_v0.UpdateDjangoInstance(
 		r.APIClient,
 		r.APIServer,
 		&v0.DjangoInstance{
 			Common:                       tpapi.Common{ID: djangoInstance.ID},
-			KubernetesRuntimeInstanceID:  runtimeInstanceId,
+			KubernetesRuntimeInstanceID:  deployedRuntimeInstanceId,
 			KubernetesWorkloadInstanceID: workloadInstance.ID,
 		},
 	); err != nil {
 		return 0, fmt.Errorf("failed to record kubernetes workload instance on django instance: %w", err)
+	}
+
+	// the database credential belongs to this instance, not to the definition
+	// that rendered the manifest: a definition can back many instances, and one
+	// password across all of them means a leak from one reaches every other.
+	// Threeport names the namespace while it reconciles, so it cannot be known
+	// before the workload instance exists — requeue until it has one.
+	namespace, err := workloadNamespace(r, *workloadInstance.ID)
+	if err != nil {
+		return 0, err
+	}
+	if namespace == "" {
+		log.Info("workload instance has no namespace yet, requeueing to create the database secret")
+		return 10, nil
+	}
+
+	kubeClient, err := runtimeKubeClient(r, *deployedRuntimeInstanceId)
+	if err != nil {
+		return 0, err
+	}
+
+	// the pods reference this secret by name and stay in
+	// CreateContainerConfigError until it exists, then start on their own
+	secretData, err := databaseSecretData(*djangoDefinition.Name)
+	if err != nil {
+		return 0, err
+	}
+
+	created, err := ensureSecret(
+		kubeClient,
+		namespace,
+		DbSecretName(*djangoDefinition.Name),
+		map[string]string{
+			"app.kubernetes.io/name":       "postgres",
+			"app.kubernetes.io/instance":   *djangoInstance.Name,
+			"app.kubernetes.io/managed-by": "django-threeport-module",
+		},
+		secretData,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to ensure the database secret: %w", err)
+	}
+	if created {
+		log.Info("database secret created", "namespace", namespace)
 	}
 
 	return 0, nil
