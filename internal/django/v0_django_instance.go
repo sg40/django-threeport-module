@@ -86,6 +86,34 @@ func v0DjangoInstanceCreated(
 		workloadInstance = &(*existingWorkloadInstances)[0]
 	}
 
+	// the runtime comes off the workload instance rather than from resolving
+	// the default again. A default can change between reconcile passes, and the
+	// workload is already deployed to whichever runtime it was created with:
+	// resolving again would put the secret in a cluster the workload is not in.
+	deployedRuntimeInstanceId := workloadInstance.KubernetesRuntimeInstanceID
+	if deployedRuntimeInstanceId == nil {
+		return 0, errors.New("kubernetes workload instance has no kubernetes runtime instance")
+	}
+
+	// the foreign keys are recorded before anything that can requeue. The
+	// workload instance already exists at this point, and the delete handler
+	// has nothing to clean up until its ID is on the django instance: a delete
+	// arriving while the secret work is still retrying would otherwise leave
+	// the workload and its resources behind. Recording it also creates the
+	// attachments, and makes a resolved default runtime visible to the user
+	// rather than implicit.
+	if _, err := client_v0.UpdateDjangoInstance(
+		r.APIClient,
+		r.APIServer,
+		&v0.DjangoInstance{
+			Common:                       tpapi.Common{ID: djangoInstance.ID},
+			KubernetesRuntimeInstanceID:  deployedRuntimeInstanceId,
+			KubernetesWorkloadInstanceID: workloadInstance.ID,
+		},
+	); err != nil {
+		return 0, fmt.Errorf("failed to record kubernetes workload instance on django instance: %w", err)
+	}
+
 	// the database credential belongs to this instance, not to the definition
 	// that rendered the manifest: a definition can back many instances, and one
 	// password across all of them means a leak from one reaches every other.
@@ -100,7 +128,7 @@ func v0DjangoInstanceCreated(
 		return 10, nil
 	}
 
-	kubeClient, err := runtimeKubeClient(r, *runtimeInstanceId)
+	kubeClient, err := runtimeKubeClient(r, *deployedRuntimeInstanceId)
 	if err != nil {
 		return 0, err
 	}
@@ -128,21 +156,6 @@ func v0DjangoInstanceCreated(
 	}
 	if created {
 		log.Info("database secret created", "namespace", namespace)
-	}
-
-	// recording the foreign keys is what creates the attachments; the runtime
-	// is recorded too so a resolved default is visible to the user rather than
-	// implicit
-	if _, err := client_v0.UpdateDjangoInstance(
-		r.APIClient,
-		r.APIServer,
-		&v0.DjangoInstance{
-			Common:                       tpapi.Common{ID: djangoInstance.ID},
-			KubernetesRuntimeInstanceID:  runtimeInstanceId,
-			KubernetesWorkloadInstanceID: workloadInstance.ID,
-		},
-	); err != nil {
-		return 0, fmt.Errorf("failed to record kubernetes workload instance on django instance: %w", err)
 	}
 
 	return 0, nil
