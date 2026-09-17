@@ -6,8 +6,41 @@ import (
 	config_v0 "django-threeport-module/pkg/config/v0"
 	"fmt"
 	"os"
+	"strconv"
 	"text/tabwriter"
 )
+
+// unset is what a column shows for an attribute the user did not set and the
+// API has not defaulted. An empty cell would run the columns together and read
+// as a rendering fault rather than an absent value.
+const unset = "-"
+
+// str renders an optional string as a column value.
+func str(value *string) string {
+	if value == nil {
+		return unset
+	}
+
+	return *value
+}
+
+// intStr renders an optional int as a column value.
+func intStr(value *int) string {
+	if value == nil {
+		return unset
+	}
+
+	return strconv.Itoa(*value)
+}
+
+// boolStr renders an optional bool as a column value.
+func boolStr(value *bool) string {
+	if value == nil {
+		return unset
+	}
+
+	return strconv.FormatBool(*value)
+}
 
 // outputGetv0DjangosCmd produces the tabular output for the
 // 'get djangos' command.
@@ -15,14 +48,26 @@ func outputGetv0DjangosCmd(
 	djangos *[]config_v0.DjangoConfig,
 ) error {
 	writer := tabwriter.NewWriter(os.Stdout, 4, 4, 4, ' ', 0)
-	// TODO: add columns for each field that users should see
-	// TODO: available fields are defined in the DjangoValues object in pkg/config/v0/django.go
-	fmt.Fprintln(writer, "NAME\t AGE")
+	fmt.Fprintln(writer, "NAME\t IMAGE\t SETTINGS MODULE\t ENVIRONMENT\t REPLICAS\t MIGRATIONS\t KUBERNETES RUNTIME\t SUBDOMAIN\t AGE")
 	for _, django := range *djangos {
+		values := django.Django
+
+		kubernetesRuntimeName := unset
+		if values.KubernetesRuntimeInstance != nil {
+			kubernetesRuntimeName = str(values.KubernetesRuntimeInstance.Name)
+		}
+
 		fmt.Fprintln(
 			writer,
-			*django.Django.Name, "\t",
-			*django.Django.Age,
+			str(values.Name), "\t",
+			str(values.Image), "\t",
+			str(values.SettingsModule), "\t",
+			str(values.Environment), "\t",
+			intStr(values.Replicas), "\t",
+			boolStr(values.RunMigrations), "\t",
+			kubernetesRuntimeName, "\t",
+			str(values.SubDomain), "\t",
+			str(values.Age),
 		)
 	}
 	writer.Flush()
@@ -36,14 +81,18 @@ func outputGetv0DjangoDefinitionsCmd(
 	djangoDefinitions *[]config_v0.DjangoDefinitionConfig,
 ) error {
 	writer := tabwriter.NewWriter(os.Stdout, 4, 4, 4, ' ', 0)
-	// TODO: add columns for each field that users should see
-	// TODO: available fields are defined in the DjangoDefinitionValues object in pkg/config/v0/django_definition.go
-	fmt.Fprintln(writer, "NAME\t AGE")
+	fmt.Fprintln(writer, "NAME\t IMAGE\t SETTINGS MODULE\t ENVIRONMENT\t REPLICAS\t MIGRATIONS\t AGE")
 	for _, djangoDefinition := range *djangoDefinitions {
+		values := djangoDefinition.DjangoDefinition
 		fmt.Fprintln(
 			writer,
-			*djangoDefinition.DjangoDefinition.Name, "\t",
-			*djangoDefinition.DjangoDefinition.Age,
+			str(values.Name), "\t",
+			str(values.Image), "\t",
+			str(values.SettingsModule), "\t",
+			str(values.Environment), "\t",
+			intStr(values.Replicas), "\t",
+			boolStr(values.RunMigrations), "\t",
+			str(values.Age),
 		)
 	}
 	writer.Flush()
@@ -57,14 +106,28 @@ func outputGetv0DjangoInstancesCmd(
 	djangoInstances *[]config_v0.DjangoInstanceConfig,
 ) error {
 	writer := tabwriter.NewWriter(os.Stdout, 4, 4, 4, ' ', 0)
-	// TODO: add columns for each field that users should see
-	// TODO: available fields are defined in the DjangoInstanceValues object in pkg/config/v0/django_instance.go
-	fmt.Fprintln(writer, "NAME\t AGE")
+	fmt.Fprintln(writer, "NAME\t DJANGO DEFINITION\t KUBERNETES RUNTIME\t SUBDOMAIN\t AGE")
 	for _, djangoInstance := range *djangoInstances {
+		values := djangoInstance.DjangoInstance
+
+		// the definition and runtime are nested values objects, so the name
+		// has to be reached through a pointer that can itself be nil
+		djangoDefinitionName := unset
+		if values.DjangoDefinition != nil {
+			djangoDefinitionName = str(values.DjangoDefinition.Name)
+		}
+		kubernetesRuntimeName := unset
+		if values.KubernetesRuntimeInstance != nil {
+			kubernetesRuntimeName = str(values.KubernetesRuntimeInstance.Name)
+		}
+
 		fmt.Fprintln(
 			writer,
-			*djangoInstance.DjangoInstance.Name, "\t",
-			*djangoInstance.DjangoInstance.Age,
+			str(values.Name), "\t",
+			djangoDefinitionName, "\t",
+			kubernetesRuntimeName, "\t",
+			str(values.SubDomain), "\t",
+			str(values.Age),
 		)
 	}
 	writer.Flush()

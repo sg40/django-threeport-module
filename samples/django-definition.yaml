@@ -1,0 +1,14 @@
+# A Django definition on its own. Many instances can be deployed from one
+# definition, each in its own namespace with its own credentials.
+#
+#   tptctl django create django-definition -c samples/django-definition.yaml
+DjangoDefinition:
+  Name: myapp
+  Image: localhost:5001/django-demo:v0.1.0
+  SettingsModule: demo.settings
+  Environment: prod
+  # left unset, the environment decides: 3 for prod, 1 otherwise
+  Replicas: 2
+  # django-admin migrate runs before the application is made available;
+  # defaults to true
+  RunMigrations: true

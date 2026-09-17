@@ -4,6 +4,7 @@ package v0
 
 import (
 	"fmt"
+	tpconfig_v0 "github.com/threeport/threeport/pkg/config/v0"
 	util "github.com/threeport/threeport/pkg/util/v0"
 	"net/http"
 )
@@ -20,9 +21,22 @@ type DjangoConfig struct {
 // DjangoDefinition and DjangoInstance API objects
 // together with a single operation.
 type DjangoValues struct {
-	// TODO: add fields needed for user to manage a DjangoDefinition and DjangoInstance together
+	// Name is used for both the definition and the instance: a defined instance
+	// is the pair that shares a name.
 	Name *string
-	Age  *string
+
+	// definition attributes
+	Image          *string
+	SettingsModule *string
+	Environment    *string
+	Replicas       *int
+	RunMigrations  *bool
+
+	// instance attributes
+	KubernetesRuntimeInstance *tpconfig_v0.KubernetesRuntimeInstanceValues
+	SubDomain                 *string
+
+	Age *string
 }
 
 // Get gets a django definition and instance from the Threeport API.
@@ -64,8 +78,8 @@ func (d *DjangoConfig) Create(
 	// execute create operations
 	if err := operations.Create(); err != nil {
 		return nil, fmt.Errorf(
-			"failed to execute create operations for django defined instance with name %s: %w",
-			*d.Django.Name,
+			"failed to execute create operations for django defined instance %s: %w",
+			djangoName(d.Django.Name),
 			err,
 		)
 	}
@@ -117,13 +131,24 @@ func (d *DjangoConfig) Delete(
 	// execute delete operations
 	if err := operations.Delete(); err != nil {
 		return nil, fmt.Errorf(
-			"failed to execute delete operations for django defined instance with name %s: %w",
-			*d.Django.Name,
+			"failed to execute delete operations for django defined instance %s: %w",
+			djangoName(d.Django.Name),
 			err,
 		)
 	}
 
 	return nil, nil
+}
+
+// djangoName describes a config's name for an error message. Validate reports a
+// missing name, and these messages wrap the failure Validate returns, so the
+// name has to be readable even when it is the thing that is absent.
+func djangoName(name *string) string {
+	if name == nil {
+		return "with no name"
+	}
+
+	return fmt.Sprintf("with name %s", *name)
 }
 
 // GetOperations returns a slice of operations used to get, create, replace or delete
@@ -140,18 +165,22 @@ func (d *DjangoConfig) GetOperations(
 	operations := util.Operations{}
 
 	// add django definition operation
-	// TODO: add appropriate fields to definition values object
 	djangoDefinitionConfig := DjangoDefinitionConfig{
 		DjangoDefinition: DjangoDefinitionValues{
-			Age:  djangoValues.Age,
-			Name: djangoValues.Name,
+			Name:           djangoValues.Name,
+			Image:          djangoValues.Image,
+			SettingsModule: djangoValues.SettingsModule,
+			Environment:    djangoValues.Environment,
+			Replicas:       djangoValues.Replicas,
+			RunMigrations:  djangoValues.RunMigrations,
+			Age:            djangoValues.Age,
 		},
 	}
 	operations.AppendOperation(util.Operation{
 		Create: func() error {
 			djangoDefinition, err := djangoDefinitionConfig.Create(apiClient, apiEndpoint)
 			if err != nil {
-				return fmt.Errorf("failed to create django definition with name %s: %w", *djangoValues.Name, err)
+				return fmt.Errorf("failed to create django definition %s: %w", djangoName(djangoValues.Name), err)
 			}
 			operatedDjangoDefinitions = append(operatedDjangoDefinitions, *djangoDefinition)
 			return nil
@@ -159,7 +188,7 @@ func (d *DjangoConfig) GetOperations(
 		Delete: func() error {
 			_, err = djangoDefinitionConfig.Delete(apiClient, apiEndpoint)
 			if err != nil {
-				return fmt.Errorf("failed to delete django definition with name %s: %w", *djangoValues.Name, err)
+				return fmt.Errorf("failed to delete django definition %s: %w", djangoName(djangoValues.Name), err)
 			}
 			return nil
 		},
@@ -182,19 +211,22 @@ func (d *DjangoConfig) GetOperations(
 		},
 	})
 
-	// add django instance operation
-	// TODO: add appropriate fields to instance values object
+	// add django instance operation. The instance points at the definition the
+	// operation above creates, which carries the same name.
 	djangoInstanceConfig := DjangoInstanceConfig{
 		DjangoInstance: DjangoInstanceValues{
-			Age:  djangoValues.Age,
-			Name: djangoValues.Name,
+			Name:                      djangoValues.Name,
+			KubernetesRuntimeInstance: djangoValues.KubernetesRuntimeInstance,
+			SubDomain:                 djangoValues.SubDomain,
+			DjangoDefinition:          &DjangoDefinitionValues{Name: djangoValues.Name},
+			Age:                       djangoValues.Age,
 		},
 	}
 	operations.AppendOperation(util.Operation{
 		Create: func() error {
 			djangoInstance, err := djangoInstanceConfig.Create(apiClient, apiEndpoint)
 			if err != nil {
-				return fmt.Errorf("failed to create django instance with name %s: %w", *djangoValues.Name, err)
+				return fmt.Errorf("failed to create django instance %s: %w", djangoName(djangoValues.Name), err)
 			}
 			operatedDjangoInstances = append(operatedDjangoInstances, *djangoInstance)
 			return nil
@@ -202,7 +234,7 @@ func (d *DjangoConfig) GetOperations(
 		Delete: func() error {
 			_, err = djangoInstanceConfig.Delete(apiClient, apiEndpoint)
 			if err != nil {
-				return fmt.Errorf("failed to delete django instance with name %s: %w", *djangoValues.Name, err)
+				return fmt.Errorf("failed to delete django instance %s: %w", djangoName(djangoValues.Name), err)
 			}
 			return nil
 		},
@@ -236,17 +268,34 @@ func mapToDjangoDefinedInstances(
 ) *[]DjangoConfig {
 	var djangoConfigs []DjangoConfig
 	for _, inst := range *djangoInstances {
+		// an instance with no name or no definition is not half of a defined
+		// instance, and the comparisons below would dereference nil
+		if inst.DjangoInstance.Name == nil ||
+			inst.DjangoInstance.DjangoDefinition == nil ||
+			inst.DjangoInstance.DjangoDefinition.Name == nil {
+			continue
+		}
+
 		for _, def := range *djangoDefinitions {
+			if def.DjangoDefinition.Name == nil {
+				continue
+			}
 			instName := *inst.DjangoInstance.Name
 			defName := *def.DjangoDefinition.Name
 			// a defined instance must have matching names for definition and instance
 			// and the definition must be associated with the instance
 			if instName == defName && *inst.DjangoInstance.DjangoDefinition.Name == *def.DjangoDefinition.Name {
-				// TODO: add fields needed for user to manage a DjangoDefinition and DjangoInstance together
 				djangoConfig := DjangoConfig{
 					Django: DjangoValues{
-						Age:  inst.DjangoInstance.Age,
-						Name: inst.DjangoInstance.Name,
+						Name:                      inst.DjangoInstance.Name,
+						Image:                     def.DjangoDefinition.Image,
+						SettingsModule:            def.DjangoDefinition.SettingsModule,
+						Environment:               def.DjangoDefinition.Environment,
+						Replicas:                  def.DjangoDefinition.Replicas,
+						RunMigrations:             def.DjangoDefinition.RunMigrations,
+						KubernetesRuntimeInstance: inst.DjangoInstance.KubernetesRuntimeInstance,
+						SubDomain:                 inst.DjangoInstance.SubDomain,
+						Age:                       inst.DjangoInstance.Age,
 					},
 				}
 				djangoConfigs = append(djangoConfigs, djangoConfig)

@@ -8,8 +8,19 @@ import (
 	errors "errors"
 	"fmt"
 	tpapi_v0 "github.com/threeport/threeport/pkg/api/v0"
+	tpclientlib "github.com/threeport/threeport/pkg/client/lib/v0"
+	tpclient_v0 "github.com/threeport/threeport/pkg/client/v0"
+	tpconfig_v0 "github.com/threeport/threeport/pkg/config/v0"
 	util "github.com/threeport/threeport/pkg/util/v0"
 	"net/http"
+)
+
+// deletionWaitAttempts and deletionWaitSeconds bound the wait for a deleted
+// instance to leave the API. They are variables rather than constants so a test
+// can observe a timeout without sitting through a minute of it.
+var (
+	deletionWaitAttempts = 60
+	deletionWaitSeconds  = 1
 )
 
 // DjangoInstanceConfig is a config abstraction for the DjangoInstance API object.
@@ -23,10 +34,19 @@ type DjangoInstanceConfig struct {
 // DjangoInstanceValues contains all the attributes needed to manage
 // the DjangoInstance API object.
 type DjangoInstanceValues struct {
-	// TODO: add config abstraction fields needed for user to manage a DjangoInstance
-	Name             *string
+	Name *string
+
+	// The Kubernetes runtime to deploy to, named rather than referenced by ID.
+	// Left unset, the control plane's default runtime is used, so a user with
+	// one cluster does not have to name it.
+	KubernetesRuntimeInstance *tpconfig_v0.KubernetesRuntimeInstanceValues
+
+	// When a DomainName is in use, the subdomain to reach this instance on.
+	SubDomain *string
+
 	DjangoDefinition *DjangoDefinitionValues
-	Age              *string
+
+	Age *string
 }
 
 // Get gets django instances from the Threeport API.
@@ -57,14 +77,67 @@ func (d *DjangoInstanceConfig) Get(
 		djangoInstances = allDjangoInstances
 	}
 
-	// assemble config objects from API objects
+	// assemble config objects from API objects. Instances commonly share a
+	// runtime and a definition, so resolved names are kept rather than fetched
+	// again for every row.
+	kubernetesRuntimeNames := make(map[uint]*string)
+	djangoDefinitionNames := make(map[uint]*string)
+
 	var djangoInstanceConfigs []DjangoInstanceConfig
 	for _, djangoInstance := range *djangoInstances {
-		// TODO: add config abstraction fields needed for user to manage a DjangoInstance
+		// the runtime and definition are foreign keys on the API object; the
+		// config abstraction exists so the user sees names instead
+		var kubernetesRuntimeInstanceValues *tpconfig_v0.KubernetesRuntimeInstanceValues
+		if djangoInstance.KubernetesRuntimeInstanceID != nil {
+			id := *djangoInstance.KubernetesRuntimeInstanceID
+			name, cached := kubernetesRuntimeNames[id]
+			if !cached {
+				kubernetesRuntimeInstance, err := tpclient_v0.GetKubernetesRuntimeInstanceByID(
+					apiClient,
+					apiEndpoint,
+					id,
+				)
+				if err != nil {
+					return nil, fmt.Errorf(
+						"failed to get kubernetes runtime instance with ID %d: %w",
+						id, err,
+					)
+				}
+				name = kubernetesRuntimeInstance.Name
+				kubernetesRuntimeNames[id] = name
+			}
+			kubernetesRuntimeInstanceValues = &tpconfig_v0.KubernetesRuntimeInstanceValues{Name: name}
+		}
+
+		var djangoDefinitionValues *DjangoDefinitionValues
+		if djangoInstance.DjangoDefinitionID != nil {
+			id := *djangoInstance.DjangoDefinitionID
+			name, cached := djangoDefinitionNames[id]
+			if !cached {
+				djangoDefinition, err := client_v0.GetDjangoDefinitionByID(
+					apiClient,
+					apiEndpoint,
+					id,
+				)
+				if err != nil {
+					return nil, fmt.Errorf(
+						"failed to get django definition with ID %d: %w",
+						id, err,
+					)
+				}
+				name = djangoDefinition.Name
+				djangoDefinitionNames[id] = name
+			}
+			djangoDefinitionValues = &DjangoDefinitionValues{Name: name}
+		}
+
 		djangoInstanceConfig := DjangoInstanceConfig{
 			DjangoInstance: DjangoInstanceValues{
-				Age:  util.Ptr(util.GetAgeFormatted(djangoInstance.CreatedAt)),
-				Name: djangoInstance.Name,
+				Name:                      djangoInstance.Name,
+				KubernetesRuntimeInstance: kubernetesRuntimeInstanceValues,
+				SubDomain:                 djangoInstance.SubDomain,
+				DjangoDefinition:          djangoDefinitionValues,
+				Age:                       util.Ptr(util.GetAgeFormatted(djangoInstance.CreatedAt)),
 			},
 		}
 		djangoInstanceConfigs = append(djangoInstanceConfigs, djangoInstanceConfig)
@@ -82,15 +155,42 @@ func (d *DjangoInstanceConfig) Create(
 
 	// validate config
 	if err := d.Validate(); err != nil {
-		return nil, fmt.Errorf("failed to validate values for django instance with name %s: %w", *djangoInstanceValues.Name, err)
+		// see the note in DjangoDefinitionConfig.Create: a missing name is what
+		// Validate reports, so it cannot be read to describe the failure
+		return nil, fmt.Errorf("failed to validate values for django instance: %w", err)
+	}
+
+	// resolve the runtime and definition the config names into the foreign keys
+	// the API object carries
+	kubernetesRuntimeInstance, err := getKubernetesRuntimeInstanceByNameOrDefault(
+		apiClient,
+		apiEndpoint,
+		djangoInstanceValues.KubernetesRuntimeInstance,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubernetes runtime instance: %w", err)
+	}
+
+	djangoDefinition, err := client_v0.GetDjangoDefinitionByName(
+		apiClient,
+		apiEndpoint,
+		*djangoInstanceValues.DjangoDefinition.Name,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to find django definition with name %s: %w",
+			*djangoInstanceValues.DjangoDefinition.Name, err,
+		)
 	}
 
 	// construct django instance object
-	// TODO: add API object fields as needed for DjangoInstance
 	djangoInstance := api_v0.DjangoInstance{
 		Instance: tpapi_v0.Instance{
 			Name: djangoInstanceValues.Name,
 		},
+		KubernetesRuntimeInstanceID: kubernetesRuntimeInstance.ID,
+		SubDomain:                   djangoInstanceValues.SubDomain,
+		DjangoDefinitionID:          djangoDefinition.ID,
 	}
 
 	// create django instance
@@ -104,11 +204,15 @@ func (d *DjangoInstanceConfig) Create(
 	}
 
 	// construct django instance config
-	// TODO: add config abstraction fields needed for user to manage a DjangoInstance
 	createdDjangoInstanceConfig := &DjangoInstanceConfig{
 		DjangoInstance: DjangoInstanceValues{
-			Age:  util.Ptr(util.GetAgeFormatted(createdDjangoInstance.CreatedAt)),
 			Name: createdDjangoInstance.Name,
+			KubernetesRuntimeInstance: &tpconfig_v0.KubernetesRuntimeInstanceValues{
+				Name: kubernetesRuntimeInstance.Name,
+			},
+			SubDomain:        createdDjangoInstance.SubDomain,
+			DjangoDefinition: &DjangoDefinitionValues{Name: djangoDefinition.Name},
+			Age:              util.Ptr(util.GetAgeFormatted(createdDjangoInstance.CreatedAt)),
 		},
 	}
 
@@ -141,8 +245,41 @@ func (d *DjangoInstanceConfig) Replace(
 		return nil, fmt.Errorf("failed to find django instance with name %s: %w", name, err)
 	}
 
-	// construct updated django instance object
-	// TODO: add API object fields as needed for DjangoInstance
+	// resolve the names the config carries into foreign keys. Unlike create,
+	// this keeps the runtime the instance is already on rather than falling back
+	// to the default, which would move the workload to another cluster on an
+	// edit to an unrelated field.
+	kubernetesRuntimeInstance, moved, err := getKubernetesRuntimeInstanceForReplace(
+		apiClient,
+		apiEndpoint,
+		djangoInstanceValues.KubernetesRuntimeInstance,
+		existingDjangoInstance.KubernetesRuntimeInstanceID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubernetes runtime instance: %w", err)
+	}
+	if moved {
+		return nil, fmt.Errorf(
+			"a django instance may not be moved from its current runtime to %s - create a new instance there instead",
+			*djangoInstanceValues.KubernetesRuntimeInstance.Name,
+		)
+	}
+
+	djangoDefinition, err := client_v0.GetDjangoDefinitionByName(
+		apiClient,
+		apiEndpoint,
+		*djangoInstanceValues.DjangoDefinition.Name,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to find django definition with name %s: %w",
+			*djangoInstanceValues.DjangoDefinition.Name, err,
+		)
+	}
+
+	// construct updated django instance object. This is a full replacement, so
+	// every field the user can set is sent rather than merged onto the existing
+	// object.
 	updatedDjangoInstance := &api_v0.DjangoInstance{
 		Common: tpapi_v0.Common{
 			ID: existingDjangoInstance.ID,
@@ -150,6 +287,15 @@ func (d *DjangoInstanceConfig) Replace(
 		Instance: tpapi_v0.Instance{
 			Name: djangoInstanceValues.Name,
 		},
+		KubernetesRuntimeInstanceID: kubernetesRuntimeInstance.ID,
+		SubDomain:                   djangoInstanceValues.SubDomain,
+		DjangoDefinitionID:          djangoDefinition.ID,
+
+		// the workload instance is an owned relationship the reconciler sets,
+		// not something the user configures. A replacement that left it out
+		// would be asking the API to clear it, which it refuses because an owned
+		// relationship is immutable once set.
+		KubernetesWorkloadInstanceID: existingDjangoInstance.KubernetesWorkloadInstanceID,
 	}
 
 	// replace django instance
@@ -163,11 +309,15 @@ func (d *DjangoInstanceConfig) Replace(
 	}
 
 	// construct updated django instance config
-	// TODO: add config abstraction fields needed for user to manage a DjangoInstance
 	updatedDjangoInstanceConfig := &DjangoInstanceConfig{
 		DjangoInstance: DjangoInstanceValues{
-			Age:  util.Ptr(util.GetAgeFormatted(replacedDjangoInstance.CreatedAt)),
 			Name: replacedDjangoInstance.Name,
+			KubernetesRuntimeInstance: &tpconfig_v0.KubernetesRuntimeInstanceValues{
+				Name: kubernetesRuntimeInstance.Name,
+			},
+			SubDomain:        replacedDjangoInstance.SubDomain,
+			DjangoDefinition: &DjangoDefinitionValues{Name: djangoDefinition.Name},
+			Age:              util.Ptr(util.GetAgeFormatted(replacedDjangoInstance.CreatedAt)),
 		},
 	}
 
@@ -180,6 +330,12 @@ func (d *DjangoInstanceConfig) Delete(
 	apiEndpoint string,
 ) (*DjangoInstanceConfig, error) {
 	djangoInstanceValues := d.DjangoInstance
+
+	// delete works by name, and unlike create it does not run Validate first,
+	// so the name is checked here rather than dereferenced blind
+	if djangoInstanceValues.Name == nil {
+		return nil, errors.New("missing required field in config: Name")
+	}
 
 	// get django instance by name
 	djangoInstance, err := client_v0.GetDjangoInstanceByName(
@@ -201,8 +357,34 @@ func (d *DjangoInstanceConfig) Delete(
 		return nil, fmt.Errorf("failed to delete django instance from Threeport API: %w", err)
 	}
 
+	// wait for the django instance to be deleted. The API marks it for deletion
+	// and the reconciler tears the workload down before the row goes away, so
+	// returning immediately would let a caller deleting a defined instance try
+	// to remove the definition while this instance still refers to it - which
+	// the API refuses. Threeport's own instance configs wait the same way.
+	if err := util.Retry(deletionWaitAttempts, deletionWaitSeconds, func() error {
+		_, err := client_v0.GetDjangoInstanceByName(apiClient, apiEndpoint, *djangoInstanceValues.Name)
+		if err == nil {
+			return errors.New("django instance not deleted")
+		}
+
+		// only an explicit not found proves the row is gone. Any other error is
+		// the API failing to answer, which says nothing about the instance, and
+		// reading it as success would let a caller delete the definition while
+		// this instance still refers to it.
+		if errors.Is(err, tpclientlib.ErrObjectNotFound) {
+			return nil
+		}
+
+		return fmt.Errorf("failed to check whether the django instance is deleted: %w", err)
+	}); err != nil {
+		return nil, fmt.Errorf(
+			"gave up waiting for django instance %s to be deleted: %w",
+			*djangoInstanceValues.Name, err,
+		)
+	}
+
 	// construct deleted django instance config
-	// TODO: add config abstraction fields needed for user to manage a DjangoInstance
 	deletedDjangoInstanceConfig := &DjangoInstanceConfig{
 		DjangoInstance: DjangoInstanceValues{
 			Name: deletedDjangoInstance.Name,
@@ -222,7 +404,11 @@ func (d *DjangoInstanceConfig) Validate() error {
 		multiError.AppendError(errors.New("missing required field in config: Name"))
 	}
 
-	// TODO: add additional validation as needed
+	// an instance has nothing to deploy without a definition, and Create
+	// dereferences the name to look it up
+	if djangoInstanceValues.DjangoDefinition == nil || djangoInstanceValues.DjangoDefinition.Name == nil {
+		multiError.AppendError(errors.New("missing required field in config: DjangoDefinition.Name"))
+	}
 
 	return multiError.Error()
 }

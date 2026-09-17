@@ -9,7 +9,9 @@ import (
 	"fmt"
 	tpapi_v0 "github.com/threeport/threeport/pkg/api/v0"
 	util "github.com/threeport/threeport/pkg/util/v0"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"net/http"
+	"strings"
 )
 
 // DjangoDefinitionConfig is a config abstraction for the DjangoDefinition API object.
@@ -23,9 +25,29 @@ type DjangoDefinitionConfig struct {
 // DjangoDefinitionValues contains all the attributes needed to manage
 // the DjangoDefinition API object.
 type DjangoDefinitionValues struct {
-	// TODO: add config abstraction fields needed for user to manage a DjangoDefinition
 	Name *string
-	Age  *string
+
+	// The container image for the Django application. Required: a Django
+	// project has no canonical public image, so the module cannot deploy
+	// anything without one.
+	Image *string
+
+	// The value for DJANGO_SETTINGS_MODULE, e.g. myapp.settings.production.
+	SettingsModule *string
+
+	// The environment the definition is deployed for. It becomes a Kubernetes
+	// label and picks the replica and storage defaults; only "prod" is
+	// special-cased, anything else gets the development sizing.
+	Environment *string
+
+	// The number of application pods. Left unset, the environment decides.
+	Replicas *int
+
+	// Whether django-admin migrate runs before the application is made
+	// available. Left unset, the API defaults it to true.
+	RunMigrations *bool
+
+	Age *string
 }
 
 // Get gets django definitions from the Threeport API.
@@ -59,11 +81,15 @@ func (d *DjangoDefinitionConfig) Get(
 	// assemble config objects from API objects
 	var djangoDefinitionConfigs []DjangoDefinitionConfig
 	for _, djangoDefinition := range *djangoDefinitions {
-		// TODO: add config abstraction fields needed for user to manage a DjangoDefinition
 		djangoDefinitionConfig := DjangoDefinitionConfig{
 			DjangoDefinition: DjangoDefinitionValues{
-				Age:  util.Ptr(util.GetAgeFormatted(djangoDefinition.CreatedAt)),
-				Name: djangoDefinition.Name,
+				Name:           djangoDefinition.Name,
+				Image:          djangoDefinition.Image,
+				SettingsModule: djangoDefinition.SettingsModule,
+				Environment:    djangoDefinition.Environment,
+				Replicas:       djangoDefinition.Replicas,
+				RunMigrations:  djangoDefinition.RunMigrations,
+				Age:            util.Ptr(util.GetAgeFormatted(djangoDefinition.CreatedAt)),
 			},
 		}
 		djangoDefinitionConfigs = append(djangoDefinitionConfigs, djangoDefinitionConfig)
@@ -81,15 +107,25 @@ func (d *DjangoDefinitionConfig) Create(
 
 	// validate config
 	if err := d.Validate(); err != nil {
-		return nil, fmt.Errorf("failed to validate values for django definition with name %s: %w", *djangoDefinitionValues.Name, err)
+		// the name is not interpolated here: a missing name is one of the things
+		// Validate reports, so reading it to describe the failure would panic on
+		// exactly the config this line exists to explain
+		return nil, fmt.Errorf("failed to validate values for django definition: %w", err)
 	}
 
-	// construct django definition object
-	// TODO: add API object fields as needed for DjangoDefinition
+	// construct django definition object. Optional fields are passed through as
+	// they arrive, including nil: the API applies its own defaults for
+	// Environment and RunMigrations, and repeating them here would mean two
+	// places to change when one of them moves.
 	djangoDefinition := api_v0.DjangoDefinition{
 		Definition: tpapi_v0.Definition{
 			Name: djangoDefinitionValues.Name,
 		},
+		Image:          djangoDefinitionValues.Image,
+		SettingsModule: djangoDefinitionValues.SettingsModule,
+		Environment:    djangoDefinitionValues.Environment,
+		Replicas:       djangoDefinitionValues.Replicas,
+		RunMigrations:  djangoDefinitionValues.RunMigrations,
 	}
 
 	// create django definition
@@ -103,11 +139,15 @@ func (d *DjangoDefinitionConfig) Create(
 	}
 
 	// construct django definition config
-	// TODO: add config abstraction fields needed for user to manage a DjangoDefinition
 	createdDjangoDefinitionConfig := &DjangoDefinitionConfig{
 		DjangoDefinition: DjangoDefinitionValues{
-			Age:  util.Ptr(util.GetAgeFormatted(createdDjangoDefinition.CreatedAt)),
-			Name: createdDjangoDefinition.Name,
+			Name:           createdDjangoDefinition.Name,
+			Image:          createdDjangoDefinition.Image,
+			SettingsModule: createdDjangoDefinition.SettingsModule,
+			Environment:    createdDjangoDefinition.Environment,
+			Replicas:       createdDjangoDefinition.Replicas,
+			RunMigrations:  createdDjangoDefinition.RunMigrations,
+			Age:            util.Ptr(util.GetAgeFormatted(createdDjangoDefinition.CreatedAt)),
 		},
 	}
 
@@ -140,8 +180,9 @@ func (d *DjangoDefinitionConfig) Replace(
 		return nil, fmt.Errorf("failed to find django definition with name %s: %w", name, err)
 	}
 
-	// construct updated django definition object
-	// TODO: add API object fields as needed for DjangoDefinition
+	// construct updated django definition object. This is a full replacement, so
+	// every field the user can set is sent: a field left out of the config is
+	// meant to be cleared, not carried over from the existing object.
 	updatedDjangoDefinition := &api_v0.DjangoDefinition{
 		Common: tpapi_v0.Common{
 			ID: existingDjangoDefinition.ID,
@@ -149,6 +190,17 @@ func (d *DjangoDefinitionConfig) Replace(
 		Definition: tpapi_v0.Definition{
 			Name: djangoDefinitionValues.Name,
 		},
+		Image:          djangoDefinitionValues.Image,
+		SettingsModule: djangoDefinitionValues.SettingsModule,
+		Environment:    djangoDefinitionValues.Environment,
+		Replicas:       djangoDefinitionValues.Replicas,
+		RunMigrations:  djangoDefinitionValues.RunMigrations,
+
+		// the workload definition is an owned relationship the reconciler sets,
+		// not something the user configures. A replacement that left it out
+		// would be asking the API to clear it, which it refuses because an owned
+		// relationship is immutable once set.
+		KubernetesWorkloadDefinitionID: existingDjangoDefinition.KubernetesWorkloadDefinitionID,
 	}
 
 	// replace django definition
@@ -162,11 +214,15 @@ func (d *DjangoDefinitionConfig) Replace(
 	}
 
 	// construct updated django definition config
-	// TODO: add config abstraction fields needed for user to manage a DjangoDefinition
 	updatedDjangoDefinitionConfig := &DjangoDefinitionConfig{
 		DjangoDefinition: DjangoDefinitionValues{
-			Age:  util.Ptr(util.GetAgeFormatted(replacedDjangoDefinition.CreatedAt)),
-			Name: replacedDjangoDefinition.Name,
+			Name:           replacedDjangoDefinition.Name,
+			Image:          replacedDjangoDefinition.Image,
+			SettingsModule: replacedDjangoDefinition.SettingsModule,
+			Environment:    replacedDjangoDefinition.Environment,
+			Replicas:       replacedDjangoDefinition.Replicas,
+			RunMigrations:  replacedDjangoDefinition.RunMigrations,
+			Age:            util.Ptr(util.GetAgeFormatted(replacedDjangoDefinition.CreatedAt)),
 		},
 	}
 
@@ -179,6 +235,12 @@ func (d *DjangoDefinitionConfig) Delete(
 	apiEndpoint string,
 ) (*DjangoDefinitionConfig, error) {
 	djangoDefinitionValues := d.DjangoDefinition
+
+	// delete works by name, and unlike create it does not run Validate first,
+	// so the name is checked here rather than dereferenced blind
+	if djangoDefinitionValues.Name == nil {
+		return nil, errors.New("missing required field in config: Name")
+	}
 
 	// get django definition by name
 	djangoDefinition, err := client_v0.GetDjangoDefinitionByName(
@@ -201,7 +263,6 @@ func (d *DjangoDefinitionConfig) Delete(
 	}
 
 	// construct deleted django definition config
-	// TODO: add config abstraction fields needed for user to manage a DjangoDefinition
 	deletedDjangoDefinitionConfig := &DjangoDefinitionConfig{
 		DjangoDefinition: DjangoDefinitionValues{
 			Name: deletedDjangoDefinition.Name,
@@ -221,7 +282,44 @@ func (d *DjangoDefinitionConfig) Validate() error {
 		multiError.AppendError(errors.New("missing required field in config: Name"))
 	}
 
-	// TODO: add additional validation as needed
+	// the name is the app.kubernetes.io/instance label on every object the
+	// module renders, and also the prefix of the resource names, so it is
+	// subject to the same late failure the environment check prevents
+	if djangoDefinitionValues.Name != nil {
+		if errs := validation.IsValidLabelValue(*djangoDefinitionValues.Name); len(errs) > 0 {
+			multiError.AppendError(fmt.Errorf(
+				"invalid value in config for Name: %s: %s",
+				*djangoDefinitionValues.Name, strings.Join(errs, "; "),
+			))
+		}
+	}
+
+	// the API rejects a definition without an image, but it does so with a
+	// database constraint error rather than something a user can act on
+	if djangoDefinitionValues.Image == nil {
+		multiError.AppendError(errors.New("missing required field in config: Image"))
+	}
+
+	// the environment becomes a Kubernetes label value. An invalid one is not
+	// rejected until Threeport tries to apply the manifest, well after the
+	// definition was accepted, so it is caught here instead.
+	if djangoDefinitionValues.Environment != nil {
+		if errs := validation.IsValidLabelValue(*djangoDefinitionValues.Environment); len(errs) > 0 {
+			multiError.AppendError(fmt.Errorf(
+				"invalid value in config for Environment: %s: %s",
+				*djangoDefinitionValues.Environment, strings.Join(errs, "; "),
+			))
+		}
+	}
+
+	// a negative replica count is rejected by the kube API for the same reason,
+	// and just as late
+	if djangoDefinitionValues.Replicas != nil && *djangoDefinitionValues.Replicas < 0 {
+		multiError.AppendError(fmt.Errorf(
+			"invalid value in config for Replicas: %d: must not be negative",
+			*djangoDefinitionValues.Replicas,
+		))
+	}
 
 	return multiError.Error()
 }

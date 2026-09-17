@@ -1,0 +1,18 @@
+# A Django instance deployed from an existing definition.
+#
+#   tptctl django create django-instance -c samples/django-instance.yaml
+DjangoInstance:
+  Name: myapp-dev
+  DjangoDefinition:
+    Name: myapp
+  # KubernetesRuntimeInstance is optional. Left out, as it is here, a create
+  # puts the instance on the control plane's default runtime, which is what a
+  # single-cluster install wants. Name one to deploy somewhere else:
+  #
+  #   KubernetesRuntimeInstance:
+  #     Name: my-runtime
+  #
+  # A replace leaves the instance on the runtime it is already on, whether or
+  # not this field is set, so editing another field here cannot move a running
+  # workload to a different cluster. Naming a different runtime in a replace is
+  # reported as an error rather than performed.
