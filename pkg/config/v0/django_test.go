@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 	util "github.com/threeport/threeport/pkg/util/v0"
 	yaml "sigs.k8s.io/yaml"
+
+	api_v0 "django-threeport-module/pkg/api/v0"
 )
 
 // TestDjangoDefinitionConfig_Validate covers the fields a user can get wrong in
@@ -76,6 +78,64 @@ func TestDjangoDefinitionConfig_Validate(t *testing.T) {
 				Image:    util.Ptr("myorg/myapp:v1"),
 				Replicas: util.Ptr(0),
 			},
+		},
+		{
+			name: "a literal env var value is accepted",
+			values: DjangoDefinitionValues{
+				Name:    util.Ptr("myapp"),
+				Image:   util.Ptr("myorg/myapp:v1"),
+				EnvVars: []api_v0.DjangoEnvVar{{Name: "QLOPS_DB_HOST", Value: "myapp-postgres"}},
+			},
+		},
+		{
+			name: "an env var secret reference is accepted",
+			values: DjangoDefinitionValues{
+				Name:  util.Ptr("myapp"),
+				Image: util.Ptr("myorg/myapp:v1"),
+				EnvVars: []api_v0.DjangoEnvVar{
+					{Name: "QLOPS_DB_PASSWORD", SecretName: "myapp-db", SecretKey: "POSTGRES_PASSWORD"},
+				},
+			},
+		},
+		{
+			name: "an env var needs a name",
+			values: DjangoDefinitionValues{
+				Name:    util.Ptr("myapp"),
+				Image:   util.Ptr("myorg/myapp:v1"),
+				EnvVars: []api_v0.DjangoEnvVar{{Value: "myapp-postgres"}},
+			},
+			wantErr: "EnvVars[0]",
+		},
+		{
+			name: "an env var cannot set both a literal value and a secret reference",
+			values: DjangoDefinitionValues{
+				Name:  util.Ptr("myapp"),
+				Image: util.Ptr("myorg/myapp:v1"),
+				EnvVars: []api_v0.DjangoEnvVar{
+					{Name: "QLOPS_DB_HOST", Value: "myapp-postgres", SecretName: "myapp-db", SecretKey: "POSTGRES_HOST"},
+				},
+			},
+			wantErr: "EnvVars[0]",
+		},
+		{
+			name: "an env var needs a literal value or a secret reference",
+			values: DjangoDefinitionValues{
+				Name:    util.Ptr("myapp"),
+				Image:   util.Ptr("myorg/myapp:v1"),
+				EnvVars: []api_v0.DjangoEnvVar{{Name: "QLOPS_DB_HOST"}},
+			},
+			wantErr: "EnvVars[0]",
+		},
+		{
+			name: "an env var secret reference needs both the secret name and key",
+			values: DjangoDefinitionValues{
+				Name:  util.Ptr("myapp"),
+				Image: util.Ptr("myorg/myapp:v1"),
+				EnvVars: []api_v0.DjangoEnvVar{
+					{Name: "QLOPS_DB_PASSWORD", SecretName: "myapp-db"},
+				},
+			},
+			wantErr: "EnvVars[0]",
 		},
 	}
 

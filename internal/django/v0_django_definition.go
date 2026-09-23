@@ -50,6 +50,11 @@ func v0DjangoDefinitionCreated(
 		settingsModule = *djangoDefinition.SettingsModule
 	}
 
+	var envVars []v0.DjangoEnvVar
+	if djangoDefinition.EnvVars != nil {
+		envVars = []v0.DjangoEnvVar(*djangoDefinition.EnvVars)
+	}
+
 	yamlDoc, err := djangoYaml(
 		*djangoDefinition.Name,
 		*djangoDefinition.Image,
@@ -58,6 +63,7 @@ func v0DjangoDefinitionCreated(
 		environment,
 		dbStorageByEnv(environment),
 		runMigrations,
+		envVars,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("failed to generate django YAML manifest: %w", err)

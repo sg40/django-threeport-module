@@ -1,12 +1,15 @@
 package django
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
+
+	v0 "django-threeport-module/pkg/api/v0"
 )
 
 // kindsIn returns the kind of every document in a multi-document YAML string,
@@ -34,7 +37,7 @@ func kindsIn(t *testing.T, doc string) []string {
 // database with its storage and credentials, the migration job, and the
 // application itself.
 func TestDjangoYaml_Resources(t *testing.T) {
-	doc, err := djangoYaml("myapp", "myorg/myapp:v1", "myapp.settings.production", 2, "dev", 20, true)
+	doc, err := djangoYaml("myapp", "myorg/myapp:v1", "myapp.settings.production", 2, "dev", 20, true, nil)
 	require.NoError(t, err)
 
 	kinds := kindsIn(t, doc)
@@ -53,7 +56,7 @@ func TestDjangoYaml_Resources(t *testing.T) {
 // TestDjangoYaml_MigrationsDisabled covers RunMigrations being false: the job
 // is the only resource that should disappear.
 func TestDjangoYaml_MigrationsDisabled(t *testing.T) {
-	doc, err := djangoYaml("myapp", "myorg/myapp:v1", "", 1, "dev", 20, false)
+	doc, err := djangoYaml("myapp", "myorg/myapp:v1", "", 1, "dev", 20, false, nil)
 	require.NoError(t, err)
 
 	kinds := kindsIn(t, doc)
@@ -66,11 +69,11 @@ func TestDjangoYaml_MigrationsDisabled(t *testing.T) {
 // Django falls back to its own default when the variable is absent, so an
 // empty value must not be set rather than set to "".
 func TestDjangoYaml_SettingsModuleOmitted(t *testing.T) {
-	withSettings, err := djangoYaml("myapp", "myorg/myapp:v1", "myapp.settings.production", 1, "dev", 20, false)
+	withSettings, err := djangoYaml("myapp", "myorg/myapp:v1", "myapp.settings.production", 1, "dev", 20, false, nil)
 	require.NoError(t, err)
 	assert.Contains(t, withSettings, "DJANGO_SETTINGS_MODULE")
 
-	withoutSettings, err := djangoYaml("myapp", "myorg/myapp:v1", "", 1, "dev", 20, false)
+	withoutSettings, err := djangoYaml("myapp", "myorg/myapp:v1", "", 1, "dev", 20, false, nil)
 	require.NoError(t, err)
 	assert.NotContains(t, withoutSettings, "DJANGO_SETTINGS_MODULE")
 }
@@ -79,7 +82,7 @@ func TestDjangoYaml_SettingsModuleOmitted(t *testing.T) {
 // manifest and the instance reconciler: the manifest names a secret it does not
 // create, so both sides have to derive the same name.
 func TestDjangoYaml_ReferencesTheInstanceSecret(t *testing.T) {
-	doc, err := djangoYaml("myapp", "myorg/myapp:v1", "myapp.settings", 1, "dev", 20, false)
+	doc, err := djangoYaml("myapp", "myorg/myapp:v1", "myapp.settings", 1, "dev", 20, false, nil)
 	require.NoError(t, err)
 
 	assert.Contains(t, doc, DbSecretName("myapp"), "the deployments have to reference the name the reconciler creates")
@@ -90,7 +93,7 @@ func TestDjangoYaml_ReferencesTheInstanceSecret(t *testing.T) {
 // manifest wires SECRET_KEY into. Django will not load its settings without
 // one, so the migration job needs it as much as the application does.
 func TestDjangoYaml_SecretKeyReachesTheApplicationAndMigrations(t *testing.T) {
-	doc, err := djangoYaml("myapp", "myorg/myapp:v1", "myapp.settings", 1, "dev", 20, true)
+	doc, err := djangoYaml("myapp", "myorg/myapp:v1", "myapp.settings", 1, "dev", 20, true, nil)
 	require.NoError(t, err)
 
 	for _, container := range []string{"django", "migrate"} {
@@ -244,7 +247,7 @@ func TestDbStorageByEnv(t *testing.T) {
 // sys.path rather than the project directory; a server adds the working
 // directory itself, which is why only the job broke.
 func TestDjangoYaml_MigrationJobPythonPath(t *testing.T) {
-	doc, err := djangoYaml("myapp", "myorg/myapp:v1", "myapp.settings", 1, "dev", 20, true)
+	doc, err := djangoYaml("myapp", "myorg/myapp:v1", "myapp.settings", 1, "dev", 20, true, nil)
 	require.NoError(t, err)
 
 	migrateJob := documentOfKind(t, doc, "Job")
@@ -273,12 +276,79 @@ func documentOfKind(t *testing.T, doc string, kind string) string {
 	return ""
 }
 
+// TestDjangoYaml_CustomEnvVars covers the gap where an application that does
+// not consume this module's generated DATABASE_URL - qlops among them, which
+// reads separate QLOPS_DB_HOST/PORT/NAME/USER/PASSWORD settings instead - had
+// no way to receive the values it actually needs. Both a literal value and a
+// reference to an existing secret must reach the application and, since
+// migrations need the database too, the migration job as well.
+func TestDjangoYaml_CustomEnvVars(t *testing.T) {
+	envVars := []v0.DjangoEnvVar{
+		{Name: "QLOPS_DB_HOST", Value: "myapp-postgres"},
+		{Name: "QLOPS_DB_PASSWORD", SecretName: DbSecretName("myapp"), SecretKey: "POSTGRES_PASSWORD"},
+	}
+	doc, err := djangoYaml("myapp", "myorg/myapp:v1", "myapp.settings", 1, "dev", 20, true, envVars)
+	require.NoError(t, err)
+
+	for _, container := range []string{"django", "migrate"} {
+		value, err := envValueFor(t, doc, container, "QLOPS_DB_HOST")
+		require.NoError(t, err)
+		assert.Equal(t, "myapp-postgres", value, "container %q did not receive the literal custom value", container)
+
+		name, key := secretKeyRefFor(t, doc, container, "QLOPS_DB_PASSWORD")
+		assert.Equal(t, DbSecretName("myapp"), name, "container %q reads QLOPS_DB_PASSWORD from the wrong secret", container)
+		assert.Equal(t, "POSTGRES_PASSWORD", key, "container %q reads the wrong key", container)
+	}
+}
+
+// envValueFor returns the literal value a named container sets an
+// environment variable to, or an error if that container or variable is not
+// found in the manifest.
+func envValueFor(t *testing.T, doc string, containerName string, variable string) (string, error) {
+	t.Helper()
+
+	for _, chunk := range strings.Split(doc, "\n---\n") {
+		if strings.TrimSpace(chunk) == "" {
+			continue
+		}
+		var parsed struct {
+			Spec struct {
+				Template struct {
+					Spec struct {
+						Containers []struct {
+							Name string `json:"name"`
+							Env  []struct {
+								Name  string `json:"name"`
+								Value string `json:"value"`
+							} `json:"env"`
+						} `json:"containers"`
+					} `json:"spec"`
+				} `json:"template"`
+			} `json:"spec"`
+		}
+		require.NoError(t, yaml.Unmarshal([]byte(chunk), &parsed))
+
+		for _, container := range parsed.Spec.Template.Spec.Containers {
+			if container.Name != containerName {
+				continue
+			}
+			for _, env := range container.Env {
+				if env.Name == variable {
+					return env.Value, nil
+				}
+			}
+		}
+	}
+
+	return "", fmt.Errorf("container %q does not set %q", containerName, variable)
+}
+
 // TestDjangoYaml_MigrationWaitsForDatabase covers the race where the migration
 // job started alongside the database and failed its first attempt with
 // connection refused. It completed only because the job retried, which leaves
 // migrations one slow database start away from failing outright.
 func TestDjangoYaml_MigrationWaitsForDatabase(t *testing.T) {
-	doc, err := djangoYaml("myapp", "myorg/myapp:v1", "myapp.settings", 1, "dev", 20, true)
+	doc, err := djangoYaml("myapp", "myorg/myapp:v1", "myapp.settings", 1, "dev", 20, true, nil)
 	require.NoError(t, err)
 
 	migrateJob := documentOfKind(t, doc, "Job")

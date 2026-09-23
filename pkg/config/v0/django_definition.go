@@ -9,6 +9,7 @@ import (
 	"fmt"
 	tpapi_v0 "github.com/threeport/threeport/pkg/api/v0"
 	util "github.com/threeport/threeport/pkg/util/v0"
+	"gorm.io/datatypes"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"net/http"
 	"strings"
@@ -47,7 +48,37 @@ type DjangoDefinitionValues struct {
 	// available. Left unset, the API defaults it to true.
 	RunMigrations *bool
 
+	// Additional environment variables to set on the application and, when
+	// RunMigrations is enabled, the migration job. Needed for any app that
+	// does not consume the generated DATABASE_URL - set either Value, or
+	// both SecretName and SecretKey to reference a key in an existing
+	// secret, such as this definition's own generated database secret
+	// (named "<Name>-db") for a value like the database password that is
+	// not knowable ahead of time as a literal.
+	EnvVars []api_v0.DjangoEnvVar
+
 	Age *string
+}
+
+// envVarsToJSONSlice converts the CLI-facing env var list into the form the
+// API object stores. An empty config list becomes nil rather than an empty,
+// non-nil slice, so a config with no EnvVars set does not send an empty
+// (but present) list that would read back differently than it was written.
+func envVarsToJSONSlice(envVars []api_v0.DjangoEnvVar) *datatypes.JSONSlice[api_v0.DjangoEnvVar] {
+	if len(envVars) == 0 {
+		return nil
+	}
+	jsonSlice := datatypes.JSONSlice[api_v0.DjangoEnvVar](envVars)
+	return &jsonSlice
+}
+
+// envVarsFromJSONSlice converts the API object's env var list into the
+// CLI-facing form.
+func envVarsFromJSONSlice(envVars *datatypes.JSONSlice[api_v0.DjangoEnvVar]) []api_v0.DjangoEnvVar {
+	if envVars == nil {
+		return nil
+	}
+	return []api_v0.DjangoEnvVar(*envVars)
 }
 
 // Get gets django definitions from the Threeport API.
@@ -89,6 +120,7 @@ func (d *DjangoDefinitionConfig) Get(
 				Environment:    djangoDefinition.Environment,
 				Replicas:       djangoDefinition.Replicas,
 				RunMigrations:  djangoDefinition.RunMigrations,
+				EnvVars:        envVarsFromJSONSlice(djangoDefinition.EnvVars),
 				Age:            util.Ptr(util.GetAgeFormatted(djangoDefinition.CreatedAt)),
 			},
 		}
@@ -126,6 +158,7 @@ func (d *DjangoDefinitionConfig) Create(
 		Environment:    djangoDefinitionValues.Environment,
 		Replicas:       djangoDefinitionValues.Replicas,
 		RunMigrations:  djangoDefinitionValues.RunMigrations,
+		EnvVars:        envVarsToJSONSlice(djangoDefinitionValues.EnvVars),
 	}
 
 	// create django definition
@@ -147,6 +180,7 @@ func (d *DjangoDefinitionConfig) Create(
 			Environment:    createdDjangoDefinition.Environment,
 			Replicas:       createdDjangoDefinition.Replicas,
 			RunMigrations:  createdDjangoDefinition.RunMigrations,
+			EnvVars:        envVarsFromJSONSlice(createdDjangoDefinition.EnvVars),
 			Age:            util.Ptr(util.GetAgeFormatted(createdDjangoDefinition.CreatedAt)),
 		},
 	}
@@ -195,6 +229,7 @@ func (d *DjangoDefinitionConfig) Replace(
 		Environment:    djangoDefinitionValues.Environment,
 		Replicas:       djangoDefinitionValues.Replicas,
 		RunMigrations:  djangoDefinitionValues.RunMigrations,
+		EnvVars:        envVarsToJSONSlice(djangoDefinitionValues.EnvVars),
 
 		// the workload definition is an owned relationship the reconciler sets,
 		// not something the user configures. A replacement that left it out
@@ -222,6 +257,7 @@ func (d *DjangoDefinitionConfig) Replace(
 			Environment:    replacedDjangoDefinition.Environment,
 			Replicas:       replacedDjangoDefinition.Replicas,
 			RunMigrations:  replacedDjangoDefinition.RunMigrations,
+			EnvVars:        envVarsFromJSONSlice(replacedDjangoDefinition.EnvVars),
 			Age:            util.Ptr(util.GetAgeFormatted(replacedDjangoDefinition.CreatedAt)),
 		},
 	}
@@ -319,6 +355,38 @@ func (d *DjangoDefinitionConfig) Validate() error {
 			"invalid value in config for Replicas: %d: must not be negative",
 			*djangoDefinitionValues.Replicas,
 		))
+	}
+
+	// each entry needs a name and exactly one source: a literal value, or a
+	// secret reference. Both or neither would be silently ambiguous once
+	// rendered into the manifest, so it is caught here instead.
+	for i, envVar := range djangoDefinitionValues.EnvVars {
+		if envVar.Name == "" {
+			multiError.AppendError(fmt.Errorf(
+				"invalid value in config for EnvVars[%d]: missing required field: Name", i,
+			))
+			continue
+		}
+
+		hasValue := envVar.Value != ""
+		hasSecretRef := envVar.SecretName != "" || envVar.SecretKey != ""
+		switch {
+		case hasValue && hasSecretRef:
+			multiError.AppendError(fmt.Errorf(
+				"invalid value in config for EnvVars[%d] (%s): set Value or SecretName/SecretKey, not both",
+				i, envVar.Name,
+			))
+		case !hasValue && !hasSecretRef:
+			multiError.AppendError(fmt.Errorf(
+				"invalid value in config for EnvVars[%d] (%s): must set Value or both SecretName and SecretKey",
+				i, envVar.Name,
+			))
+		case hasSecretRef && (envVar.SecretName == "" || envVar.SecretKey == ""):
+			multiError.AppendError(fmt.Errorf(
+				"invalid value in config for EnvVars[%d] (%s): SecretName and SecretKey must both be set",
+				i, envVar.Name,
+			))
+		}
 	}
 
 	return multiError.Error()

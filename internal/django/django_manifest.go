@@ -7,6 +7,8 @@ import (
 
 	kube "github.com/threeport/threeport/pkg/kube/v0"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	v0 "django-threeport-module/pkg/api/v0"
 )
 
 const (
@@ -67,6 +69,7 @@ func djangoYaml(
 	environment string,
 	dbStorageGb int,
 	runMigrations bool,
+	envVars []v0.DjangoEnvVar,
 ) (string, error) {
 	var yamlDoc string
 
@@ -243,6 +246,24 @@ func djangoYaml(
 			"name":  "DJANGO_SETTINGS_MODULE",
 			"value": settingsModule,
 		})
+	}
+
+	// custom env vars come last so they can't shadow the module's own
+	// DATABASE_URL/SECRET_KEY/DJANGO_SETTINGS_MODULE entries above by
+	// accident - Kubernetes takes the first definition of a duplicate name
+	for _, envVar := range envVars {
+		entry := map[string]interface{}{"name": envVar.Name}
+		if envVar.SecretName != "" || envVar.SecretKey != "" {
+			entry["valueFrom"] = map[string]interface{}{
+				"secretKeyRef": map[string]interface{}{
+					"name": envVar.SecretName,
+					"key":  envVar.SecretKey,
+				},
+			}
+		} else {
+			entry["value"] = envVar.Value
+		}
+		appEnv = append(appEnv, entry)
 	}
 
 	// django-admin is an installed console script, so Python puts its own

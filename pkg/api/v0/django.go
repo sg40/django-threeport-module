@@ -3,7 +3,10 @@
 
 package v0
 
-import tpapi_v0 "github.com/threeport/threeport/pkg/api/v0"
+import (
+	tpapi_v0 "github.com/threeport/threeport/pkg/api/v0"
+	"gorm.io/datatypes"
+)
 
 type DjangoDefinition struct {
 	tpapi_v0.Common         `swaggerignore:"true" mapstructure:",squash"`
@@ -30,6 +33,13 @@ type DjangoDefinition struct {
 	// application is made available. Django requires this on any schema change,
 	// so it defaults to true.
 	RunMigrations *bool `validate:"optional" gorm:"default:true"`
+
+	// Additional environment variables to set on the Django application and,
+	// when RunMigrations is enabled, its migration job. Needed for any app
+	// that does not consume this module's generated DATABASE_URL - for
+	// example one that reads separate DB host/port/name/user/password
+	// settings instead, which DATABASE_URL alone cannot satisfy.
+	EnvVars *datatypes.JSONSlice[DjangoEnvVar] `validate:"optional"`
 
 	// The Kubernetes workload definition carrying the manifests this module
 	// generates for the Django app and its database. The relationship tag has
