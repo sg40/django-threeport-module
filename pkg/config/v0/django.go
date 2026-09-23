@@ -3,6 +3,7 @@
 package v0
 
 import (
+	api_v0 "django-threeport-module/pkg/api/v0"
 	"fmt"
 	tpconfig_v0 "github.com/threeport/threeport/pkg/config/v0"
 	util "github.com/threeport/threeport/pkg/util/v0"
@@ -31,6 +32,7 @@ type DjangoValues struct {
 	Environment    *string
 	Replicas       *int
 	RunMigrations  *bool
+	EnvVars        []api_v0.DjangoEnvVar
 
 	// instance attributes
 	KubernetesRuntimeInstance *tpconfig_v0.KubernetesRuntimeInstanceValues
@@ -173,6 +175,7 @@ func (d *DjangoConfig) GetOperations(
 			Environment:    djangoValues.Environment,
 			Replicas:       djangoValues.Replicas,
 			RunMigrations:  djangoValues.RunMigrations,
+			EnvVars:        djangoValues.EnvVars,
 			Age:            djangoValues.Age,
 		},
 	}
@@ -293,6 +296,7 @@ func mapToDjangoDefinedInstances(
 						Environment:               def.DjangoDefinition.Environment,
 						Replicas:                  def.DjangoDefinition.Replicas,
 						RunMigrations:             def.DjangoDefinition.RunMigrations,
+						EnvVars:                   def.DjangoDefinition.EnvVars,
 						KubernetesRuntimeInstance: inst.DjangoInstance.KubernetesRuntimeInstance,
 						SubDomain:                 inst.DjangoInstance.SubDomain,
 						Age:                       inst.DjangoInstance.Age,

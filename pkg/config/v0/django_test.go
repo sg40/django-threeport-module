@@ -210,6 +210,7 @@ func TestMapToDjangoDefinedInstances(t *testing.T) {
 			Environment:    util.Ptr("prod"),
 			Replicas:       util.Ptr(3),
 			RunMigrations:  util.Ptr(true),
+			EnvVars:        []api_v0.DjangoEnvVar{{Name: "QLOPS_DB_HOST", Value: "myapp-postgres"}},
 		}},
 		{DjangoDefinition: DjangoDefinitionValues{Name: util.Ptr("other")}},
 	}
@@ -232,6 +233,8 @@ func TestMapToDjangoDefinedInstances(t *testing.T) {
 	assert.Equal(t, 3, *values.Replicas)
 	assert.Equal(t, "www", *values.SubDomain, "the instance's attributes have to survive it too")
 	assert.Equal(t, "2d", *values.Age)
+	require.Len(t, values.EnvVars, 1, "the definition's EnvVars have to survive the mapping too")
+	assert.Equal(t, "QLOPS_DB_HOST", values.EnvVars[0].Name)
 }
 
 // TestMapToDjangoDefinedInstances_SkipsIncompleteInstances covers the
@@ -310,6 +313,35 @@ func TestSampleConfigsParse(t *testing.T) {
 			test.assert(t, test.into)
 		})
 	}
+}
+
+// TestDjangoConfig_ParsesEnvVars covers the combined config accepting EnvVars.
+// The combined DjangoValues struct used to omit this field entirely, so a
+// config setting it through the combined "django" resource - as opposed to
+// the standalone "django-definition" resource - was rejected outright by the
+// CLI's strict unmarshaling as an unknown field.
+func TestDjangoConfig_ParsesEnvVars(t *testing.T) {
+	content := []byte(`
+Django:
+  Name: myapp
+  Image: myorg/myapp:v1
+  EnvVars:
+    - Name: QLOPS_DB_HOST
+      Value: myapp-postgres
+    - Name: QLOPS_DB_PASSWORD
+      SecretName: myapp-db
+      SecretKey: POSTGRES_PASSWORD
+`)
+
+	var config DjangoConfig
+	require.NoError(t, yaml.UnmarshalStrict(content, &config), "the CLI would reject this file")
+
+	require.Len(t, config.Django.EnvVars, 2)
+	assert.Equal(t, "QLOPS_DB_HOST", config.Django.EnvVars[0].Name)
+	assert.Equal(t, "myapp-postgres", config.Django.EnvVars[0].Value)
+	assert.Equal(t, "QLOPS_DB_PASSWORD", config.Django.EnvVars[1].Name)
+	assert.Equal(t, "myapp-db", config.Django.EnvVars[1].SecretName)
+	assert.Equal(t, "POSTGRES_PASSWORD", config.Django.EnvVars[1].SecretKey)
 }
 
 // TestDjangoConfig_CreateReportsAMissingName covers the error message wrapping
