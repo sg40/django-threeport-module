@@ -25,7 +25,7 @@ var (
 var installCmd = &cobra.Command{
 	Example: "  tptctl django install",
 	Long:    "Install the Django module to an existing Threeport control plane",
-	PreRun:  tptctl_cmd.CommandPreRunFunc,
+	PreRun:  CommandPreRunFunc,
 	Run: func(cmd *cobra.Command, args []string) {
 		apiClient, _, apiEndpoint, requestedControlPlane := tptctl_cmd.GetClientContext(cmd)
 
