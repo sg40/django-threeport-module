@@ -4,11 +4,13 @@ package v0
 
 import (
 	"fmt"
+	"strings"
 
 	tpapi_lib "github.com/threeport/threeport/pkg/api/lib/v0"
 	util "github.com/threeport/threeport/pkg/util/v0"
 	"gorm.io/datatypes"
 	gorm "gorm.io/gorm"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // validateDjangoEnvVars enforces the invariants on DjangoDefinition.EnvVars
@@ -32,6 +34,16 @@ func validateDjangoEnvVars(envVars *datatypes.JSONSlice[DjangoEnvVar]) error {
 		if envVar.Name == "" {
 			return util.NewBadRequestError(fmt.Sprintf(
 				"invalid value for EnvVars[%d]: missing required field: Name", i,
+			))
+		}
+
+		// a name Kubernetes cannot accept - most commonly one containing '='
+		// - would otherwise persist and only fail once Threeport tries to
+		// apply the generated Deployment or migration Job
+		if errs := validation.IsEnvVarName(envVar.Name); len(errs) > 0 {
+			return util.NewBadRequestError(fmt.Sprintf(
+				"invalid value for EnvVars[%d] (%s): %s",
+				i, envVar.Name, strings.Join(errs, "; "),
 			))
 		}
 

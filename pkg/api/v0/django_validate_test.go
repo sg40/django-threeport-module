@@ -72,6 +72,11 @@ func TestValidateDjangoEnvVars(t *testing.T) {
 			wantErr: "EnvVars[0]",
 		},
 		{
+			name:    "a name Kubernetes cannot accept is rejected",
+			envVars: jsonSlice(DjangoEnvVar{Name: "QLOPS_DB_HOST=evil", Value: "myapp-postgres"}),
+			wantErr: "EnvVars[0]",
+		},
+		{
 			name: "a valid entry does not mask an invalid one later in the list",
 			envVars: jsonSlice(
 				DjangoEnvVar{Name: "QLOPS_DB_HOST", Value: "myapp-postgres"},

@@ -137,6 +137,17 @@ func TestDjangoDefinitionConfig_Validate(t *testing.T) {
 			},
 			wantErr: "EnvVars[0]",
 		},
+		{
+			name: "an env var name Kubernetes cannot accept is rejected",
+			values: DjangoDefinitionValues{
+				Name:  util.Ptr("myapp"),
+				Image: util.Ptr("myorg/myapp:v1"),
+				EnvVars: []api_v0.DjangoEnvVar{
+					{Name: "QLOPS_DB_HOST=evil", Value: "myapp-postgres"},
+				},
+			},
+			wantErr: "EnvVars[0]",
+		},
 	}
 
 	for _, test := range tests {

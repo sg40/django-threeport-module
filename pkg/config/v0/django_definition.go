@@ -368,6 +368,17 @@ func (d *DjangoDefinitionConfig) Validate() error {
 			continue
 		}
 
+		// a name Kubernetes cannot accept - most commonly one containing '='
+		// - would otherwise pass validation here and only fail once
+		// Threeport tries to apply the generated Deployment or migration Job
+		if errs := validation.IsEnvVarName(envVar.Name); len(errs) > 0 {
+			multiError.AppendError(fmt.Errorf(
+				"invalid value in config for EnvVars[%d] (%s): %s",
+				i, envVar.Name, strings.Join(errs, "; "),
+			))
+			continue
+		}
+
 		hasValue := envVar.Value != ""
 		hasSecretRef := envVar.SecretName != "" || envVar.SecretKey != ""
 		switch {
