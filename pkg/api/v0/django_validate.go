@@ -2,11 +2,68 @@
 
 package v0
 
-import gorm "gorm.io/gorm"
+import (
+	"fmt"
 
-// beforeCreate runs before the DjangoDefinition is created.
-func (d *DjangoDefinition) beforeCreate(tx *gorm.DB) error {
+	tpapi_lib "github.com/threeport/threeport/pkg/api/lib/v0"
+	util "github.com/threeport/threeport/pkg/util/v0"
+	"gorm.io/datatypes"
+	gorm "gorm.io/gorm"
+)
+
+// validateDjangoEnvVars enforces the invariants on DjangoDefinition.EnvVars
+// that the standard "validate" struct tags cannot express for a field stored
+// as a single JSON column: each entry needs a name, and exactly one of a
+// literal Value or a complete SecretName/SecretKey reference.
+//
+// This has to run here, not only in the CLI config validator
+// (pkg/config/v0), because a direct REST or generated-client caller bypasses
+// the CLI entirely and writes this API model straight through. Without a
+// check at this boundary, such a caller could persist an empty name, a
+// partial secret reference, or both a value and a secret reference, and
+// reconciliation would render an invalid or unintended Kubernetes
+// environment entry from it.
+func validateDjangoEnvVars(envVars *datatypes.JSONSlice[DjangoEnvVar]) error {
+	if envVars == nil {
+		return nil
+	}
+
+	for i, envVar := range *envVars {
+		if envVar.Name == "" {
+			return util.NewBadRequestError(fmt.Sprintf(
+				"invalid value for EnvVars[%d]: missing required field: Name", i,
+			))
+		}
+
+		hasValue := envVar.Value != ""
+		hasSecretRef := envVar.SecretName != "" || envVar.SecretKey != ""
+		switch {
+		case hasValue && hasSecretRef:
+			return util.NewBadRequestError(fmt.Sprintf(
+				"invalid value for EnvVars[%d] (%s): set Value or SecretName/SecretKey, not both",
+				i, envVar.Name,
+			))
+		case !hasValue && !hasSecretRef:
+			return util.NewBadRequestError(fmt.Sprintf(
+				"invalid value for EnvVars[%d] (%s): must set Value or both SecretName and SecretKey",
+				i, envVar.Name,
+			))
+		case hasSecretRef && (envVar.SecretName == "" || envVar.SecretKey == ""):
+			return util.NewBadRequestError(fmt.Sprintf(
+				"invalid value for EnvVars[%d] (%s): SecretName and SecretKey must both be set",
+				i, envVar.Name,
+			))
+		}
+	}
+
 	return nil
+}
+
+// beforeCreate runs before the DjangoDefinition is created. The Create hook
+// receiver holds the full inbound object, so d.EnvVars is exactly what will
+// be written.
+func (d *DjangoDefinition) beforeCreate(tx *gorm.DB) error {
+	return validateDjangoEnvVars(d.EnvVars)
 }
 
 // beforeUpdate runs before the DjangoDefinition is updated.
@@ -26,7 +83,14 @@ func (d *DjangoDefinition) beforeCreate(tx *gorm.DB) error {
 //
 //	tpapi_lib "github.com/threeport/threeport/pkg/api/lib/v0"
 func (d *DjangoDefinition) beforeUpdate(tx *gorm.DB) error {
-	return nil
+	// the receiver is the loaded DB row under PATCH, not the inbound
+	// payload, so the value actually being written has to come from
+	// IncomingValues rather than d itself
+	incoming, ok := tpapi_lib.IncomingValues(tx).(*DjangoDefinition)
+	if !ok {
+		return nil
+	}
+	return validateDjangoEnvVars(incoming.EnvVars)
 }
 
 // beforeDelete runs before the DjangoDefinition is deleted.
