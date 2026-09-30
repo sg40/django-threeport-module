@@ -2,11 +2,13 @@ package django
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	kube "github.com/threeport/threeport/pkg/kube/v0"
+	"sigs.k8s.io/yaml"
 
 	v0 "django-threeport-module/pkg/api/v0"
 )
@@ -146,5 +148,40 @@ func TestDjangoInstanceKustomizeOverlay_Deterministic(t *testing.T) {
 		b, err := djangoInstanceKustomizeOverlay("myapp", true, []string{"B=1", "A=2", "C=3"}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, *a, *b)
+	}
+}
+
+// threeport's workload instance reconciler renders the overlay against the
+// workload resource definitions' JSON, joined with "---", not against the YAML
+// document the definition was created from. The overlay has to work on that
+// exact shape.
+func TestDjangoInstanceKustomizeOverlay_AppliesToJSONBase(t *testing.T) {
+	yamlBase, err := djangoYaml(
+		"myapp", "myorg/myapp:v1", "myapp.settings", 1, "dev", 20, true,
+		[]string{"A=def"}, nil,
+	)
+	require.NoError(t, err)
+
+	var jsonDocs []string
+	for _, chunk := range strings.Split(yamlBase, "\n---\n") {
+		if strings.TrimSpace(chunk) == "" {
+			continue
+		}
+		j, err := yaml.YAMLToJSON([]byte(chunk))
+		require.NoError(t, err)
+		jsonDocs = append(jsonDocs, string(j))
+	}
+	jsonBase := strings.Join(jsonDocs, "\n---\n")
+
+	overlay, err := djangoInstanceKustomizeOverlay(
+		"myapp", true, []string{"A=inst"},
+		[]v0.DjangoSecretEnvVar{{Name: "B", SecretName: "s", SecretKey: "k"}},
+	)
+	require.NoError(t, err)
+
+	got := envByContainer(t, jsonBase, overlay)
+	for _, container := range []string{"Deployment/django", "Job/migrate"} {
+		assert.Equal(t, renderedEnv{Value: "inst"}, got[container]["A"], container)
+		assert.Equal(t, renderedEnv{SecretRef: "s/k"}, got[container]["B"], container)
 	}
 }
