@@ -16,7 +16,7 @@ require (
 	github.com/pressly/goose/v3 v3.24.1
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
-	github.com/threeport/threeport v0.6.1-0.20260911102532-8aa63ca0beb7
+	github.com/threeport/threeport v0.7.0-rc.0.0.20261007124554-297983ee9aea
 	go.uber.org/zap v1.27.0
 	gorm.io/driver/postgres v1.5.11
 	gorm.io/gorm v1.25.12
@@ -261,6 +261,3 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2-0.20260122202528-d9cc6641c482 // indirect
 )
-
-// TEMPORARY: local dev against threeport#556. Remove and bump the version once merged.
-replace github.com/threeport/threeport => ../../threeport/feat-kubernetes-workload-instance-kustomize-overlay
