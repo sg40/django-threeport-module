@@ -32,10 +32,12 @@ type DjangoDefinition struct {
 	RunMigrations *bool `validate:"optional" gorm:"default:true"`
 
 	// Env holds additional literal environment variables as KEY=VALUE
-	// entries, applied to every instance of this definition. Encrypted at
-	// rest, since a value here may be a real credential rather than a
-	// reference to one - same shape and handling as
-	// MachineWorkloadDefinition.Env.
+	// entries, applied to every instance of this definition. Encrypted in
+	// this object's own column, same shape and handling as
+	// MachineWorkloadDefinition.Env. The values are not kept secret past that:
+	// they are decrypted into the workload definition's manifest, which
+	// Threeport stores unencrypted and Kubernetes shows in the pod spec. Use
+	// SecretEnvVars for anything sensitive.
 	Env *[]string `validate:"optional" gorm:"type:jsonb;serializer:json" encrypt:"true"`
 
 	// SecretEnvVars are additional environment variables sourced from an
@@ -63,7 +65,9 @@ type DjangoInstance struct {
 
 	// Env is the instance-scoped equivalent of DjangoDefinition.Env. A KEY
 	// present here overrides the same KEY on the definition, for this
-	// instance only. Applied when the instance is created.
+	// instance only. Applied when the instance is created. As with
+	// DjangoDefinition.Env, values are decrypted into the workload instance's
+	// overlay, so use SecretEnvVars for anything sensitive.
 	Env *[]string `validate:"optional" gorm:"type:jsonb;serializer:json" encrypt:"true"`
 
 	// SecretEnvVars is the instance-scoped equivalent of

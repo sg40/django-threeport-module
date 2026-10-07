@@ -47,7 +47,8 @@ type DjangoInstanceValues struct {
 	DjangoDefinition *DjangoDefinitionValues
 
 	// Literal environment variables as KEY=VALUE entries for this instance
-	// only. A name also set on the definition overrides it. Stored encrypted.
+	// only. A name also set on the definition overrides it. Not for credentials:
+	// the values are copied into the workload overlay. Use SecretEnvVars for those.
 	// Applied when the instance is created.
 	Env *[]string
 

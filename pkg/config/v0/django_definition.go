@@ -48,7 +48,8 @@ type DjangoDefinitionValues struct {
 	RunMigrations *bool
 
 	// Additional literal environment variables as KEY=VALUE entries, applied to
-	// every instance of the definition. Stored encrypted.
+	// every instance of the definition. Not for credentials: the values are
+	// copied into the workload manifest. Use SecretEnvVars for those.
 	Env *[]string
 
 	// Additional environment variables sourced from existing Kubernetes

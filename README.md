@@ -20,7 +20,7 @@ configured. It is the reusable part: one definition can back many instances.
 | `Environment` | no | Drives defaults such as replica count. Defaults to `dev`. |
 | `Replicas` | no | Overrides the replica count derived from `Environment`. |
 | `RunMigrations` | no | Runs `django-admin migrate` before the app is made available. Defaults to `true`, because Django requires it on any schema change. |
-| `Env` | no | Extra literal environment variables as `KEY=VALUE` entries, applied to every instance. Stored encrypted. See [Environment variables](#environment-variables). |
+| `Env` | no | Extra literal environment variables as `KEY=VALUE` entries, applied to every instance. For non-sensitive config only: values end up in the workload manifest. See [Environment variables](#environment-variables). |
 | `SecretEnvVars` | no | Extra environment variables read from an existing Kubernetes secret (`Name`, `SecretName`, `SecretKey`), applied to every instance. |
 
 **`DjangoInstance`** is a running deployment of a definition.
@@ -30,7 +30,7 @@ configured. It is the reusable part: one definition can back many instances.
 | `SubDomain` | no | The subdomain used to reach this instance when a domain name is attached. Not yet acted on — see limitations. |
 | `KubernetesRuntimeInstanceID` | no | The runtime to deploy to. Falls back to the control plane's default runtime when unset. |
 | `DjangoDefinitionID` | yes | The definition this instance deploys. |
-| `Env` | no | Literal environment variables for this instance only. A name also set on the definition overrides it. Stored encrypted. |
+| `Env` | no | Literal environment variables for this instance only. A name also set on the definition overrides it. Non-sensitive config only. |
 | `SecretEnvVars` | no | Secret-referenced environment variables for this instance only. Overrides same-named definition variables. |
 
 ### Environment variables
@@ -73,6 +73,15 @@ DjangoInstance:
       SecretName: myapp-prod-postmark
       SecretKey: api-key
 ```
+
+**Put credentials in `SecretEnvVars`, not `Env`.** `Env` values are encrypted in
+the Django object's own database column and redacted by `get`, but they are
+decrypted to build the workload: a definition's `Env` is written into the
+workload definition's manifest, and an instance's into the workload instance's
+Kustomize overlay. Threeport stores both unencrypted, and Kubernetes shows
+literal env values in the pod spec. `Env` is for non-sensitive settings such as
+feature flags and hostnames. `SecretEnvVars` only references a secret by name
+and key, so no value passes through Threeport at all.
 
 `DATABASE_URL`, `SECRET_KEY`, `DJANGO_SETTINGS_MODULE` and `PYTHONPATH` are set
 by the module and cannot be overridden. A name may appear once per object,
