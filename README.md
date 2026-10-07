@@ -76,7 +76,9 @@ DjangoInstance:
 
 `DATABASE_URL`, `SECRET_KEY`, `DJANGO_SETTINGS_MODULE` and `PYTHONPATH` are set
 by the module and cannot be overridden. A name may appear once per object,
-in either `Env` or `SecretEnvVars`. `tptctl ... get` redacts `Env` values
+in either `Env` or `SecretEnvVars`. The API enforces these rules itself and
+answers 400 to a request that breaks them, so they hold for direct API callers
+as well as for `tptctl`. `tptctl ... get` redacts `Env` values
 unless `--decrypt-secrets` is passed. Environment variables are applied when
 the object is created: a replace that changes them is rejected (see limitations).
 
