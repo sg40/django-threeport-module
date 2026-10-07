@@ -1,8 +1,10 @@
 package v0
 
 import (
+	"strings"
 	"testing"
 
+	encryption "github.com/threeport/threeport/pkg/encryption/v0"
 	util "github.com/threeport/threeport/pkg/util/v0"
 
 	"github.com/stretchr/testify/assert"
@@ -60,17 +62,59 @@ func TestValidateIncludesEnvVars(t *testing.T) {
 	assert.ErrorContains(t, inst.Validate(), "SecretEnvVars[0]")
 }
 
+// storedEnv returns Env as the API stores it: values encrypted with key.
+func storedEnv(t *testing.T, key string, entries ...string) *[]string {
+	t.Helper()
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		k, v, _ := strings.Cut(entry, "=")
+		enc, err := encryption.Encrypt(key, v)
+		require.NoError(t, err)
+		out = append(out, k+"="+enc)
+	}
+	return &out
+}
+
 func TestCheckEnvUnchanged(t *testing.T) {
-	existingEnv := &[]string{"A=cipher", "B=cipher"}
+	key, err := encryption.GenerateKey()
+	require.NoError(t, err)
+
+	existingEnv := storedEnv(t, key, "A=one", "B=two")
 	existingSecrets := &[]api_v0.DjangoSecretEnvVar{{Name: "S", SecretName: "n", SecretKey: "k"}}
 	same := []DjangoSecretEnvVarValues{{Name: "S", SecretName: "n", SecretKey: "k"}}
+	check := func(env *[]string, secrets []DjangoSecretEnvVarValues) error {
+		return checkEnvUnchanged("x", env, secrets, existingEnv, existingSecrets, key)
+	}
 
-	assert.NoError(t, checkEnvUnchanged("x", &[]string{"B=new", "A=new"}, same, existingEnv, existingSecrets))
-	assert.NoError(t, checkEnvUnchanged("x", nil, nil, nil, nil))
-	assert.Error(t, checkEnvUnchanged("x", &[]string{"A=1"}, same, existingEnv, existingSecrets), "key removed")
-	assert.Error(t, checkEnvUnchanged("x", existingEnv, nil, existingEnv, existingSecrets), "secret removed")
-	assert.Error(t, checkEnvUnchanged("x", existingEnv,
-		[]DjangoSecretEnvVarValues{{Name: "S", SecretName: "n", SecretKey: "other"}}, existingEnv, existingSecrets), "secret changed")
+	assert.NoError(t, check(&[]string{"B=two", "A=one"}, same), "same entries in a different order")
+	assert.NoError(t, check(&[]string{"A=" + encryption.RedactedValuePlaceholder, "B=two"}, same),
+		"a redacted placeholder, as get prints it, is the stored value")
+	assert.NoError(t, checkEnvUnchanged("x", nil, nil, nil, nil, ""), "nothing set needs no key")
+
+	assert.Error(t, check(&[]string{"A=changed", "B=two"}, same), "value-only edit")
+	assert.Error(t, check(&[]string{"A=one"}, same), "entry removed")
+	assert.Error(t, check(&[]string{"A=one", "B=two", "C=new"}, same), "entry added")
+	assert.Error(t, check(&[]string{"A=one", "C=two"}, same), "name replaced")
+	assert.Error(t, check(existingEnv, nil), "secret removed")
+	assert.Error(t, check(&[]string{"A=one", "B=two"},
+		[]DjangoSecretEnvVarValues{{Name: "S", SecretName: "n", SecretKey: "other"}}), "secret changed")
+
+	err = check(&[]string{"A=changed", "B=two"}, same)
+	assert.ErrorContains(t, err, "cannot be changed after creation")
+}
+
+func TestCheckEnvUnchanged_NeedsKeyWhenEnvIsInvolved(t *testing.T) {
+	key, err := encryption.GenerateKey()
+	require.NoError(t, err)
+	stored := storedEnv(t, key, "A=one")
+
+	assert.ErrorContains(t,
+		checkEnvUnchanged("x", &[]string{"A=one"}, nil, stored, nil, ""),
+		"encryption key", "a missing key must not read as unchanged")
+	assert.ErrorContains(t,
+		checkEnvUnchanged("x", nil, nil, stored, nil, ""),
+		"encryption key", "removing Env still needs the key to see what was removed")
+	assert.NoError(t, checkEnvUnchanged("x", nil, nil, nil, nil, ""))
 }
 
 func TestDecryptOrRedact(t *testing.T) {

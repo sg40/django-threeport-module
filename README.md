@@ -191,10 +191,12 @@ path reachable - before that a config file could not express the fields at all.
 **Environment variables cannot be changed after creation.** Definition
 variables are rendered into the workload definition once, and an instance's are
 set as the workload instance's Kustomize overlay, which Threeport treats as
-immutable. `replace` rejects a change to the set of `Env` names or to
-`SecretEnvVars`. Literal `Env` values are encrypted and cannot be compared, so
-editing only a value under an unchanged name is not detected and is not
-applied. Create a new definition or instance to change them.
+immutable. `replace` rejects any change to `Env`, values included, or to
+`SecretEnvVars`, rather than storing an edit that would never be applied. To
+compare literal values, `tptctl django replace` reads the control plane's
+encryption key from your threeport config and decrypts the stored `Env`; a value
+shown as `[encrypted value redacted]` in `get` output counts as unchanged.
+Create a new definition or instance to change them.
 
 **`SubDomain` is stored but not acted on.** Reaching an instance by subdomain
 needs a gateway and a domain name attached to it, which is a second set of

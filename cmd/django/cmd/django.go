@@ -29,6 +29,14 @@ func getEncryptionKey(requestedControlPlane string) string {
 	if !djangoDecrypt {
 		return ""
 	}
+	return controlPlaneEncryptionKey(requestedControlPlane)
+}
+
+// controlPlaneEncryptionKey reads the control plane's encryption key from the
+// threeport config. Replace needs it regardless of any flag: the stored
+// literal env values are encrypted, and checking that a replace leaves them
+// unchanged means decrypting them.
+func controlPlaneEncryptionKey(requestedControlPlane string) string {
 	threeportConfig, _, err := cli.GetThreeportConfig(cliArgs.ControlPlaneName)
 	if err != nil {
 		cli.Error("failed to get threeport config", err)
@@ -493,7 +501,7 @@ var ReplaceDjangoDefinitionCmd = &cobra.Command{
 	Long:    "Replace an existing django definition.\n Note that the entire object will replaced with a PUT request.\n All fields must be provided in the config file.",
 	PreRun:  CommandPreRunFunc,
 	Run: func(cmd *cobra.Command, args []string) {
-		apiClient, _, apiEndpoint, _ := tptctl_cmd.GetClientContext(cmd)
+		apiClient, _, apiEndpoint, requestedControlPlane := tptctl_cmd.GetClientContext(cmd)
 
 		// replace django definition based on version
 		switch djangoVersion {
@@ -511,7 +519,7 @@ var ReplaceDjangoDefinitionCmd = &cobra.Command{
 			}
 
 			// replace django definition
-			updatedDjangoDefinition, err := djangoDefinitionConfig.Replace(apiClient, apiEndpoint, djangoName)
+			updatedDjangoDefinition, err := djangoDefinitionConfig.Replace(apiClient, apiEndpoint, djangoName, controlPlaneEncryptionKey(requestedControlPlane))
 			if err != nil {
 				cli.Error("failed to update django definition", err)
 				os.Exit(1)
@@ -823,7 +831,7 @@ var ReplaceDjangoInstanceCmd = &cobra.Command{
 	Long:    "Replace an existing django instance.\n Note that the entire object will replaced with a PUT request.\n All fields must be provided in the config file.",
 	PreRun:  CommandPreRunFunc,
 	Run: func(cmd *cobra.Command, args []string) {
-		apiClient, _, apiEndpoint, _ := tptctl_cmd.GetClientContext(cmd)
+		apiClient, _, apiEndpoint, requestedControlPlane := tptctl_cmd.GetClientContext(cmd)
 
 		// replace django instance based on version
 		switch djangoVersion {
@@ -841,7 +849,7 @@ var ReplaceDjangoInstanceCmd = &cobra.Command{
 			}
 
 			// replace django instance
-			updatedDjangoInstance, err := djangoInstanceConfig.Replace(apiClient, apiEndpoint, djangoName)
+			updatedDjangoInstance, err := djangoInstanceConfig.Replace(apiClient, apiEndpoint, djangoName, controlPlaneEncryptionKey(requestedControlPlane))
 			if err != nil {
 				cli.Error("failed to update django instance", err)
 				os.Exit(1)

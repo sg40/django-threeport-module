@@ -250,6 +250,7 @@ func (d *DjangoInstanceConfig) Replace(
 	apiClient *http.Client,
 	apiEndpoint string,
 	name string,
+	encryptionKey string,
 ) (*DjangoInstanceConfig, error) {
 	djangoInstanceValues := d.DjangoInstance
 
@@ -308,6 +309,7 @@ func (d *DjangoInstanceConfig) Replace(
 		djangoInstanceValues.SecretEnvVars,
 		existingDjangoInstance.Env,
 		existingDjangoInstance.SecretEnvVars,
+		encryptionKey,
 	); err != nil {
 		return nil, err
 	}

@@ -105,12 +105,13 @@ func (d *DjangoConfig) Replace(
 	apiClient *http.Client,
 	apiEndpoint string,
 	name string,
+	encryptionKey string,
 ) (*[]DjangoConfig, error) {
 	// get operations
 	operations, djangoDefinitions, djangoInstances := d.GetOperations(
 		apiClient,
 		apiEndpoint,
-		"",
+		encryptionKey,
 	)
 
 	// execute replace operations
@@ -217,7 +218,7 @@ func (d *DjangoConfig) GetOperations(
 		},
 		Name: "django definition",
 		Replace: func(name string) error {
-			djangoDefinition, err := djangoDefinitionConfig.Replace(apiClient, apiEndpoint, name)
+			djangoDefinition, err := djangoDefinitionConfig.Replace(apiClient, apiEndpoint, name, encryptionKey)
 			if err != nil {
 				return fmt.Errorf("failed to replace django definition with name %s: %w", name, err)
 			}
@@ -263,7 +264,7 @@ func (d *DjangoConfig) GetOperations(
 		},
 		Name: "django instance",
 		Replace: func(name string) error {
-			djangoInstance, err := djangoInstanceConfig.Replace(apiClient, apiEndpoint, name)
+			djangoInstance, err := djangoInstanceConfig.Replace(apiClient, apiEndpoint, name, encryptionKey)
 			if err != nil {
 				return fmt.Errorf("failed to replace django instance with name %s: %w", name, err)
 			}

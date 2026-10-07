@@ -184,6 +184,7 @@ func (d *DjangoDefinitionConfig) Replace(
 	apiClient *http.Client,
 	apiEndpoint string,
 	name string,
+	encryptionKey string,
 ) (*DjangoDefinitionConfig, error) {
 	djangoDefinitionValues := d.DjangoDefinition
 
@@ -210,6 +211,7 @@ func (d *DjangoDefinitionConfig) Replace(
 		djangoDefinitionValues.SecretEnvVars,
 		existingDjangoDefinition.Env,
 		existingDjangoDefinition.SecretEnvVars,
+		encryptionKey,
 	); err != nil {
 		return nil, err
 	}
